@@ -1,3 +1,9 @@
-@import './variables.css';
-@import './reset.css';
 @import "tailwindcss";
+
+@utility scrollbar-w-none {
+  scrollbar-width: none;
+  /* Chrome / Safari / Edge */
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
