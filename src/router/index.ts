@@ -29,6 +29,11 @@ const routes: RouteRecordRaw[] = [
         path: 'space/apps/:app_id',
         name: "space-apps-detail",
         component: () => import('@/views/space/apps/DetailView.vue'),
+      },
+      {
+        path: 'app-orchestration/:id',
+        name: ROUTE_NAME.APP_ORCHESTRATION_DETAIL,
+        component: () => import('@/views/app-orchestration/detail/index.vue'),
       }
     ],
   },
