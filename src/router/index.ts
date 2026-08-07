@@ -22,9 +22,14 @@ const routes: RouteRecordRaw[] = [
     children: [
       {
         path: 'auth/login',
-        name: ROUTE_NAME.SPACEAPPSLIST,
+        name: ROUTE_NAME.LOGIN,
         component: () => import('@/views/auth/LoginView.vue'),
       },
+      {
+        path: 'space/apps/:app_id',
+        name: "space-apps-detail",
+        component: () => import('@/views/space/apps/DetailView.vue'),
+      }
     ],
   },
   {

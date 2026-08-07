@@ -15,7 +15,8 @@ export const APP_META = {
 export const ROUTE_NAME = {
   HOME: 'Home',
   NOT_FOUND: 'NotFound',
-  SPACEAPPSLIST:'SpaceAppsList'
+  SPACEAPPSLIST:'SpaceAppsList',
+  LOGIN:'login'
 } as const
 
 /** 默认分页参数 */

@@ -1,16 +1,7 @@
-<script setup lang="ts">
-// 依赖就绪后按需引入模块
-// import {} from '@/'
-</script>
+<script setup lang="ts"></script>
 
 <template>
-  <div class="page-name">
-    <h2>页面标题</h2>
-  </div>
+  <router-view />
 </template>
 
-<style scoped>
-.page-name {
-
-}
-</style>
+<style scoped></style>

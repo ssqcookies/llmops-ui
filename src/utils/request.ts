@@ -6,8 +6,9 @@
 // 处理网络异常、http 错误（4xx/5xx）、超时中断；
 // 支持 AbortController，方便对话场景停止请求；
 // 可扩展统一请求头（Token 鉴权）。
+import { Message } from '@arco-design/web-vue'
 
-import {apiPrefix} from "@/config"
+import {apiPrefix,httpCode} from "@/config"
 
 
 // 1.超时时间为100s
@@ -91,14 +92,19 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
     new Promise((resolve, reject) => {
       globalThis
         .fetch(urlWithPrefix, options as RequestInit)
-        .then((res) => {
-          if (!res.ok) {
-            return reject(new Error(`请求错误 status:${res.status}`))
+          .then(async (res) => {
+          const json = await res.json()
+          if (json.code === httpCode.success) {
+            resolve(json)
+          } else {
+            Message.error(json.message)
+            reject(new Error(json.message))
           }
-          return res.json()
         })
-        .then((data) => resolve(data as T))
-        .catch((err) => reject(err))
+        .catch((err) => {
+          Message.error(err.message)
+          reject(err)
+        })
     }),
   ]) as Promise<T>
 }
