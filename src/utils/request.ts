@@ -18,10 +18,12 @@ const TIME_OUT = 100 * 1000
 const baseFetchOptions = {
   method: 'GET',
   mode: 'cors',
-  credentials: 'include',//默认跨域 credentials:include，携带 Cookie
+  // credentials: 'include',//默认跨域 credentials:include，携带 Cookie
   headers: new Headers({
     'Content-Type': 'application/json',
   }),
+
+   
   redirect: 'follow',
 }
 
@@ -93,13 +95,35 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
       globalThis
         .fetch(urlWithPrefix, options as RequestInit)
           .then(async (res) => {
-          const json = await res.json()
-          if (json.code === httpCode.success) {
-            resolve(json)
-          } else {
-            Message.error(json.message)
-            reject(new Error(json.message))
-          }
+            // ✅ 优先拦截HTTP异常状态（404/500/403等）
+        if (!res.ok) {
+          const rawText = await res.text();
+          console.log("HTTP异常响应文本：", rawText);
+          Message.error(`请求错误：${res.status} ${res.statusText}`);
+          return reject(new Error(`HTTP ${res.status}`));
+        }
+
+        const raw = await res.text();
+        console.log("原始响应文本：", raw);
+        if (!raw) {
+          throw new Error("服务端返回空数据");
+        }
+        const json = JSON.parse(raw);
+        if (json.code === httpCode.success) {
+          resolve(json);
+        } else {
+          Message.error(json.message);
+          reject(new Error(json.message));
+        }
+  //        const raw = await res;
+  // console.log("原始响应文本：", raw); // 重点观察！
+  // const json = JSON.parse(raw);
+  //         if (json.code === httpCode.success) {
+  //           resolve(json)
+  //         } else {
+  //           Message.error(json.message)
+  //           reject(new Error(json.message))
+  //         }
         })
         .catch((err) => {
           Message.error(err.message)

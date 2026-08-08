@@ -33,8 +33,10 @@ const send = async () => {
     isLoading.value = true
 
     const response = await debugApp(route.params.app_id as string, humanQuery)
+   
     const content = response.data.content
 
+    console.log("原始响应文本：", response); // 重点观察！
     messages.value.push({
       role: 'ai',
       content: content,

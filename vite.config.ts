@@ -6,17 +6,17 @@ import vueJsx from '@vitejs/plugin-vue-jsx'
 import vueDevTools from 'vite-plugin-vue-devtools'
 import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
-  // server: {
-  //   proxy: {
-  //     '/api': {
-  //       target: 'http://localhost:5000',
-  //       changeOrigin: true,
-  //       rewrite(path) {
-  //         return path.replace(/^\/api/, '')
-  //       },
-  //     },
-  //   },
-  // },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        rewrite(path) {
+          return path.replace(/^\/api/, '')
+        },
+      },
+    },
+  },
   plugins: [
     vue(),
     vueJsx(),
