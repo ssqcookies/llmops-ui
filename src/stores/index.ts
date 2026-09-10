@@ -2,5 +2,5 @@ import { createPinia } from 'pinia'
 
 export const pinia = createPinia()
 
-export * from './counter'
-export * from './modules/auth'
+export * from './modules/account'
+export * from './modules/credential'

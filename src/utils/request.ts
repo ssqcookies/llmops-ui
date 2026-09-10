@@ -7,8 +7,10 @@
 // 支持 AbortController，方便对话场景停止请求；
 // 可扩展统一请求头（Token 鉴权）。
 import { Message } from '@arco-design/web-vue'
+import { useCredentialStore } from '@/stores'
 
 import {apiPrefix,httpCode} from "@/config"
+import router from '@/router'
 
 
 // 1.超时时间为100s
@@ -36,21 +38,25 @@ const baseFetchOptions = {
 type FetchOptionType = Omit<RequestInit, 'body'> & {
   params?: Record<string, any>
   body?: BodyInit | Record<string, any> | null
+  /** 业务错误（code !== success）时是否 reject；默认 true。为 false 时 resolve 完整响应供调用方自行判断 code。 */
+  rejectOnBusinessError?: boolean
 }
 
 // 4.封装基础的fetch请求
 const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> => {
-  // 5.将所有的配置信息合并起来
-  const options: typeof baseFetchOptions & FetchOptionType = Object.assign(
+  // 5.将 rejectOnBusinessError 从 fetch 配置中剥离
+  const { rejectOnBusinessError = true, ...restFetchOptions } = fetchOptions
+  // 6.将所有的配置信息合并起来
+  const options: typeof baseFetchOptions & Omit<FetchOptionType, 'rejectOnBusinessError'> = Object.assign(
     {},
     baseFetchOptions,
-    fetchOptions,
+    restFetchOptions,
   )
 
-  // 6.组装url
+  // 7.组装url
   let urlWithPrefix = `${apiPrefix}${url.startsWith('/') ? url : `/${url}`}`
 
-  // 7.解构出对应的请求方法、params、body参数
+  // 8.解构出对应的请求方法、params、body参数
   const { method, params, body } = options
 
   // 8.如果请求是GET方法，并且传递了params参数
@@ -113,17 +119,12 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
           resolve(json);
         } else {
           Message.error(json.message);
-          reject(new Error(json.message));
+          if (rejectOnBusinessError) {
+            reject(new Error(json.message));
+          } else {
+            resolve(json);
+          }
         }
-  //        const raw = await res;
-  // console.log("原始响应文本：", raw); // 重点观察！
-  // const json = JSON.parse(raw);
-  //         if (json.code === httpCode.success) {
-  //           resolve(json)
-  //         } else {
-  //           Message.error(json.message)
-  //           reject(new Error(json.message))
-  //         }
         })
         .catch((err) => {
           Message.error(err.message)
@@ -132,6 +133,150 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
     }),
   ]) as Promise<T>
 }
+
+
+// 5.封装基于post的sse(流式事件响应)请求
+export const ssePost = async (
+  url: string,
+  fetchOptions: FetchOptionType,
+  onData: (data: { [key: string]: any }) => void,
+) => {
+  // 5.1 组装基础的fetch请求配置
+  const options = Object.assign({}, baseFetchOptions, { method: 'POST' }, fetchOptions)
+
+  // 5.2 组装请求URL
+  const urlWithPrefix = `${apiPrefix}${url.startsWith('/') ? url : `/${url}`}`
+
+  // 5.3 结构body参数，并处理body对应的数据
+  const { body } = fetchOptions
+  if (body) options.body = JSON.stringify(body)
+
+  // 5.4 发起fetch请求并处理流式事件响应
+  const response = await globalThis.fetch(urlWithPrefix, options as RequestInit)
+  return handleStream(response, onData)
+}
+
+const handleStream = (response: Response, onData: (data: { [key: string]: any }) => void) => {
+  // 1.检测网络请求是否正常
+  if (!response.ok) throw new Error('网络请求失败')
+
+  // 2.构建reader以及deocder
+  const reader = response.body?.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  // 3.构建read函数用于去读取数据
+  const read = () => {
+    let hasError = false
+    reader?.read().then((result: any) => {
+      if (result.done) return
+
+      buffer += decoder.decode(result.value, { stream: true })
+      const lines = buffer.split('\n')
+
+      let event = ''
+      let data = ''
+
+      try {
+        lines.forEach((line) => {
+          line = line.trim()
+          if (line.startsWith('event:')) {
+            event = line.slice(6).trim()
+          } else if (line.startsWith('data:')) {
+            //数据
+            data = line.slice(5).trim()
+          }
+
+          // 每个事件以空行结束，只有event和data同时存在，才表示一次流式事件的数据完整获取到了
+          if (line === '') {
+            if (event !== '' && data !== '') {
+              onData({
+                event: event,
+                data: JSON.parse(data),
+              })
+              event = ''
+              data = ''
+            }
+          }
+        })
+        buffer = lines.pop() || ''
+      } catch (e) {
+        hasError = true
+      }
+
+      if (!hasError) read()
+    })
+  }
+  // 4.调用read函数去执行获取对应的数据
+  read()
+}
+
+
+export const upload = <T>(url: string, options: any = {}): Promise<T> => {
+  // 1 组装请求URL
+  const urlWithPrefix = `${apiPrefix}${url.startsWith('/') ? url : `/${url}`}`
+
+  // 2.组装xhr请求配置信息
+  const defaultOptions = {
+    method: 'POST',
+    url: urlWithPrefix,
+    headers: {},
+    data: {},
+  }
+  options = {
+    ...defaultOptions,
+    ...options,
+    headers: { ...defaultOptions.headers, ...options.headers },
+  }
+  const { credential, clear: clearCredential } = useCredentialStore()
+  const access_token = credential.access_token
+  if (access_token) options.headers['Authorization'] = `Bearer ${access_token}`
+
+  // 3.构建promise并使用xhr完成文件上传
+  return new Promise((resolve, reject) => {
+    // 4.创建xhr服务
+    const xhr = new XMLHttpRequest()
+
+    // 5.初始化xhr请求并配置headers
+    xhr.open(options.method, options.url)
+    for (const key in options.headers) {
+      xhr.setRequestHeader(key, options.headers[key])
+    }
+
+    // 6.设置xhr响应格式并携带授权凭证（例如cookie）
+    xhr.withCredentials = true
+    xhr.responseType = 'json'
+
+    // 7.监听xhr状态变化并导出数据
+    xhr.onreadystatechange = async () => {
+      // 8.判断xhr的状态是不是为4，如果为4则代表已经传输完成（涵盖成功与失败）
+      if (xhr.readyState === 4) {
+        // 9.检查响应状态码，当HTTP状态码为200的时候表示请求成功
+        if (xhr.status === 200) {
+          // 10.判断业务状态码是否正常
+          const response = xhr.response
+          if (response.code === httpCode.success) {
+            resolve(response)
+          } else if (response.code === httpCode.unauthorized) {
+            clearCredential()
+            await router.replace({ path: '/auth/login' })
+          } else {
+            reject(xhr.response)
+          }
+        } else {
+          reject(xhr)
+        }
+      }
+    }
+
+    // 10.添加xhr进度监听
+    xhr.upload.onprogress = options.onprogress
+
+    // 11.发送请求
+    xhr.send(options.data)
+  })
+}
+
 
 export const request = <T>(url: string, options = {}) => {
   return baseFetch<T>(url, options)
@@ -143,4 +288,51 @@ export const get = <T>(url: string, options = {}) => {
 
 export const post = <T>(url: string, options = {}) => {
   return request<T>(url, Object.assign({}, options, { method: 'POST' }))
+}
+
+// 14. 保留业务错误 code 的请求封装（用于需要调用方自行判断 code 的场景）
+export const requestWithCode = <T extends { code: string }>(url: string, options = {}) => {
+  return baseFetch<T>(url, Object.assign({}, options, { rejectOnBusinessError: false }))
+}
+
+// 15. 获取原始 Response（用于图片流/svg 源码等非 JSON 响应）
+export const requestRaw = (url: string, fetchOptions: FetchOptionType = {}): Promise<Response> => {
+  const options: typeof baseFetchOptions & FetchOptionType = Object.assign(
+    {},
+    baseFetchOptions,
+    fetchOptions,
+  )
+
+  let urlWithPrefix = `${apiPrefix}${url.startsWith('/') ? url : `/${url}`}`
+  const { method, params, body } = options
+
+  if (method === 'GET' && params) {
+    const searchParams = new URLSearchParams()
+    Object.entries(params).forEach(([key, val]) => {
+      if (val !== undefined && val !== null) {
+        searchParams.append(key, String(val))
+      }
+    })
+    const queryStr = searchParams.toString()
+    if (queryStr) {
+      urlWithPrefix += urlWithPrefix.includes('?') ? `&${queryStr}` : `?${queryStr}`
+    }
+    delete options.params
+  }
+
+  if (body && !(body instanceof FormData)) {
+    options.body = JSON.stringify(body)
+  }
+
+  return Promise.race([
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('接口已超时')), TIME_OUT)
+    }),
+    globalThis.fetch(urlWithPrefix, options as RequestInit).then((res) => {
+      if (!res.ok) {
+        return Promise.reject(new Error(`HTTP ${res.status}`))
+      }
+      return res
+    }),
+  ])
 }

@@ -21,7 +21,7 @@ Vue3 `<script setup lang="ts">` 组合式语法 + Arco Design Vue + TailwindCSS 
 2. 禁止直接使用 axios、原生fetch；预留导入项目封装好 get / post 请求函数，不自行定义底层请求；
 3. 接口返回结构、表单对象、数据模型全部定义TS interface，严格规避 any；无法精准定义时使用 unknown 配合类型守卫；
 4. 页面视图与业务逻辑适度拆分，复杂区块、弹窗、列表项抽离独立子组件；弹窗、抽屉封装为页面内部子组件，禁止独立路由；
-5. 禁止硬编码大量静态Mock数据，统一使用 ref / reactive 声明响应式变量；如需mock，单独放在变量区域，不散布模板内；
+5. 禁止硬编码大量静态Mock数据，统一使用 ref / reactive 声明响应式变量；将mock数据，单独放在变量区域，不散布模板内；
 6. 所有表单增加基础校验规则，优先使用Arco Design自带表单校验能力；
 7. UI交互组件优先选用 Arco Design Vue 内置组件；布局样式优先使用 Tailwind CSS 内联class；
     ✅ 仅纯布局容器允许使用 div / span；

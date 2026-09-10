@@ -1,32 +1,30 @@
-/** 本地存储封装，统一加前缀并做 JSON 序列化 */
-const PREFIX = 'llmops_'
-
-function buildKey(key: string): string {
-  return `${PREFIX}${key}`
-}
-
-export const storage = {
-  get<T = unknown>(key: string, defaultValue: T): T {
-    const raw = localStorage.getItem(buildKey(key))
-    if (raw === null) return defaultValue
-    try {
-      return JSON.parse(raw) as T
-    } catch {
-      return defaultValue
+export default {
+  // 获取localStorage中的值
+  get: (key: string, defaultValue: any = ''): any => {
+    const value = localStorage.getItem(key)
+    if (value) {
+      try {
+        return JSON.parse(value)
+      } catch {
+        return value
+      }
+    }
+    return defaultValue
+  },
+  // 设置localStorage中的值
+  set: (key: string, value: any): void => {
+    if (typeof value === 'string') {
+      localStorage.setItem(key, value)
+    } else {
+      localStorage.setItem(key, JSON.stringify(value))
     }
   },
-
-  set(key: string, value: unknown): void {
-    localStorage.setItem(buildKey(key), JSON.stringify(value))
+  // 移除localStorage中的值
+  remove: (key: string): void => {
+    localStorage.removeItem(key)
   },
-
-  remove(key: string): void {
-    localStorage.removeItem(buildKey(key))
-  },
-
-  clear(): void {
-    Object.keys(localStorage)
-      .filter((k) => k.startsWith(PREFIX))
-      .forEach((k) => localStorage.removeItem(k))
+  // 清除localStorage中的所有值
+  clear: (): void => {
+    localStorage.clear()
   },
 }

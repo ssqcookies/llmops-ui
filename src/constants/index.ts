@@ -17,7 +17,12 @@ export const ROUTE_NAME = {
   NOT_FOUND: 'NotFound',
   SPACEAPPSLIST:'SpaceAppsList',
   LOGIN:'login',
-  APP_ORCHESTRATION_DETAIL: 'AppOrchestrationDetail'
+  APP_ORCHESTRATION_DETAIL: 'AppOrchestrationDetail',
+  PLUGIN: 'PluginSquare',
+  PERSONAL_SPACE: 'PersonalSpace',
+  KNOWLEDGE_DETAIL: 'KnowledgeDetail',
+  KNOWLEDGE_DOCUMENT_DETAIL: 'KnowledgeDocumentDetail',
+  KNOWLEDGE_ADD_FILE: 'KnowledgeAddFile',
 } as const
 
 /** 默认分页参数 */

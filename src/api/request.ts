@@ -1,4 +1,4 @@
-import { useAuthStore } from '@/stores'
+import { useAccountStore } from '@/stores'
 
 export interface RequestOptions {
   /** 请求方法 */
@@ -39,9 +39,9 @@ export async function request<T = unknown>(
     finalHeaders.set('Content-Type', 'application/json;charset=utf-8')
   }
   if (auth) {
-    const authStore = useAuthStore()
-    if (authStore.token) {
-      finalHeaders.set('Authorization', `Bearer ${authStore.token}`)
+    const authStore = useAccountStore()
+    if (authStore.account) {
+      finalHeaders.set('Authorization', `Bearer ${authStore.account}`)
     }
   }
 
@@ -60,8 +60,8 @@ export async function request<T = unknown>(
   })
 
   if (response.status === 401) {
-    const authStore = useAuthStore()
-    authStore.logout()
+    const authStore = useAccountStore()
+    authStore.clear()
     throw new Error('未授权，请重新登录')
   }
 
