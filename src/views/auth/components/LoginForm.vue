@@ -2,9 +2,34 @@
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCredentialStore } from '@/stores'
-import { Message, type ValidatedError } from '@arco-design/web-vue'
+import { Message, type ValidatedError, type FieldRule } from '@arco-design/web-vue'
 import { provider } from '@/services/oauth'
 import { passwordLogin } from '@/services/auth'
+
+/** 密码格式：至少包含一个字母和一个数字，长度 8-16 */
+const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d!@#$%^&*()._-]{8,16}$/
+
+/** 密码校验规则（输入时实时校验，不等后端返回） */
+const passwordRules: FieldRule[] = [
+  { required: true, message: '账号密码不能为空' },
+  {
+    validator: (value, callback) => {
+      if (!value) {
+        callback('账号密码不能为空')
+        return
+      }
+      if (value.length < 8 || value.length > 16) {
+        callback('密码长度需为 8-16 位')
+        return
+      }
+      if (!PASSWORD_PATTERN.test(value)) {
+        callback('密码需至少包含一个字母和一个数字')
+        return
+      }
+      callback()
+    },
+  },
+]
 
 // 1.定义自定义组件所需数据
 const errorMessage = ref('')
@@ -80,7 +105,7 @@ const handleSubmit = async ({ errors }: { errors: Record<string, ValidatedError>
       </a-form-item>
       <a-form-item
         field="password"
-        :rules="[{ required: true, message: '账号密码不能为空' }]"
+        :rules="passwordRules"
         :validate-trigger="['change', 'blur']"
         hide-label
       >

@@ -7,9 +7,9 @@
 // 支持 AbortController，方便对话场景停止请求；
 // 可扩展统一请求头（Token 鉴权）。
 import { Message } from '@arco-design/web-vue'
-import { useCredentialStore } from '@/stores'
+import { useCredentialStore, useAccountStore } from '@/stores'
 
-import {apiPrefix,httpCode} from "@/config"
+import { apiPrefix, httpCode } from "@/config"
 import router from '@/router'
 
 
@@ -25,7 +25,7 @@ const baseFetchOptions = {
     'Content-Type': 'application/json',
   }),
 
-   
+
   redirect: 'follow',
 }
 
@@ -52,6 +52,10 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
     baseFetchOptions,
     restFetchOptions,
   )
+  const { credential, clear: clearCredential } = useCredentialStore()
+  const { clear: clearAccount } = useAccountStore()
+  const access_token = credential.access_token
+  if (access_token) options.headers.set('Authorization', `Bearer ${access_token}`)
 
   // 7.组装url
   let urlWithPrefix = `${apiPrefix}${url.startsWith('/') ? url : `/${url}`}`
@@ -61,16 +65,7 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
 
   // 8.如果请求是GET方法，并且传递了params参数
   if (method === 'GET' && params) {
-    // const paramsArray: string[] = []
-    // Object.keys(params).forEach((key) => {
-    //   paramsArray.push(`${key}=${encodeURIComponent(params[key])}`)
-    // })
-    // if (urlWithPrefix.search(/\?/) === -1) {
-    //   urlWithPrefix += `?${paramsArray.join('&')}`
-    // } else {
-    //   urlWithPrefix += `&${paramsArray.join('&')}`
-    // }
-     const searchParams = new URLSearchParams()
+    const searchParams = new URLSearchParams()
     Object.entries(params).forEach(([key, val]) => {
       if (val !== undefined && val !== null) {
         searchParams.append(key, String(val))
@@ -100,31 +95,35 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
     new Promise((resolve, reject) => {
       globalThis
         .fetch(urlWithPrefix, options as RequestInit)
-          .then(async (res) => {
-            // ✅ 优先拦截HTTP异常状态（404/500/403等）
-        if (!res.ok) {
-          const rawText = await res.text();
-          console.log("HTTP异常响应文本：", rawText);
-          Message.error(`请求错误：${res.status} ${res.statusText}`);
-          return reject(new Error(`HTTP ${res.status}`));
-        }
-
-        const raw = await res.text();
-        console.log("原始响应文本：", raw);
-        if (!raw) {
-          throw new Error("服务端返回空数据");
-        }
-        const json = JSON.parse(raw);
-        if (json.code === httpCode.success) {
-          resolve(json);
-        } else {
-          Message.error(json.message);
-          if (rejectOnBusinessError) {
-            reject(new Error(json.message));
-          } else {
-            resolve(json);
+        .then(async (res) => {
+          // ✅ 优先拦截HTTP异常状态（404/500/403等）
+          if (!res.ok) {
+            const rawText = await res.text();
+            console.log("HTTP异常响应文本：", rawText);
+            Message.error(`请求错误：${res.status} ${res.statusText}`);
+            return reject(new Error(`HTTP ${res.status}`));
           }
-        }
+
+          const raw = await res.text();
+          console.log("原始响应文本：", raw);
+          if (!raw) {
+            throw new Error("服务端返回空数据");
+          }
+          const json = JSON.parse(raw);
+          if (json.code === httpCode.success) {
+            resolve(json);
+          } else if (json.code === httpCode.unauthorized) {
+            clearCredential()
+            clearAccount()
+            await router.replace({ path: '/auth/login' })
+          } else {
+            Message.error(json.message);
+            if (rejectOnBusinessError) {
+              reject(new Error(json.message));
+            } else {
+              resolve(json);
+            }
+          }
         })
         .catch((err) => {
           Message.error(err.message)
@@ -143,6 +142,9 @@ export const ssePost = async (
 ) => {
   // 5.1 组装基础的fetch请求配置
   const options = Object.assign({}, baseFetchOptions, { method: 'POST' }, fetchOptions)
+  const { credential } = useCredentialStore()
+  const access_token = credential.access_token
+  if (access_token) options.headers.set('Authorization', `Bearer ${access_token}`)
 
   // 5.2 组装请求URL
   const urlWithPrefix = `${apiPrefix}${url.startsWith('/') ? url : `/${url}`}`
@@ -229,6 +231,7 @@ export const upload = <T>(url: string, options: any = {}): Promise<T> => {
     headers: { ...defaultOptions.headers, ...options.headers },
   }
   const { credential, clear: clearCredential } = useCredentialStore()
+  const { clear: clearAccount } = useAccountStore()
   const access_token = credential.access_token
   if (access_token) options.headers['Authorization'] = `Bearer ${access_token}`
 
@@ -259,6 +262,7 @@ export const upload = <T>(url: string, options: any = {}): Promise<T> => {
             resolve(response)
           } else if (response.code === httpCode.unauthorized) {
             clearCredential()
+            clearAccount()
             await router.replace({ path: '/auth/login' })
           } else {
             reject(xhr.response)

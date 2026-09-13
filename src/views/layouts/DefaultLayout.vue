@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { NavMenuItem, CurrentUser, LayoutDialogs } from './types'
+import { useAccountStore } from '@/stores'
+import { getCurrentUser } from '@/services/account'
 import CreateAppFlow from '@/views/components/CreateAppFlow.vue'
 import AccountSettingsModal from '@/views/components/AccountSettingsModal.vue'
 import LogoutConfirmModal from '@/views/components/LogoutConfirmModal.vue'
@@ -22,6 +24,7 @@ import IconOpenApiFull from '@/components/icons/IconOpenApiFull.vue'
 
 const route = useRoute()
 const router = useRouter()
+const accountStore = useAccountStore()
 
 // ============================================================
 // 布局级状态
@@ -29,11 +32,12 @@ const router = useRouter()
 
 const pageLoading = ref(true)
 
+/** 当前用户信息（从 account store 读取，保持响应式） */
 const currentUser = reactive<CurrentUser>({
-  id: '',
-  name: '',
-  email: '',
-  avatar: '',
+  id: accountStore.account.id,
+  name: accountStore.account.name,
+  email: accountStore.account.email,
+  avatar: accountStore.account.avatar,
 })
 
 const dialogs = reactive<LayoutDialogs>({
@@ -41,6 +45,27 @@ const dialogs = reactive<LayoutDialogs>({
   accountSettings: false,
   logoutConfirm: false,
 })
+
+/** 从 account store 同步到本地 reactive */
+const syncUserFromStore = () => {
+  currentUser.id = accountStore.account.id || ''
+  currentUser.name = accountStore.account.name || ''
+  currentUser.email = accountStore.account.email || ''
+  currentUser.avatar = accountStore.account.avatar || ''
+}
+
+/** 拉取当前登录用户信息并写入 account store */
+const fetchCurrentUser = async () => {
+  try {
+    const res = await getCurrentUser()
+    if (res?.data) {
+      accountStore.update(res.data)
+      syncUserFromStore()
+    }
+  } catch {
+    // 拉取失败不阻塞页面渲染，保持 store 中已有数据
+  }
+}
 
 // ============================================================
 // 导航菜单
@@ -138,16 +163,20 @@ const openLogoutConfirm = () => {
 // 生命周期：拉取登录态用户信息
 // ============================================================
 
-onMounted(() => {
-  // TODO: 预留接口调用位置 - 获取当前登录用户信息
-  setTimeout(() => {
-    currentUser.id = '10086'
-    currentUser.name = '慕小课'
-    currentUser.email = 'zehuiya@163.com'
-    currentUser.avatar = ''
+onMounted(async () => {
+  // 若 store 中已有用户信息（如刚登录），先立即渲染，再后台拉取最新
+  if (accountStore.account.id) {
+    syncUserFromStore()
     pageLoading.value = false
-  }, 500)
+  }
+  await fetchCurrentUser()
+  pageLoading.value = false
 })
+
+/** 账号设置保存后刷新侧栏用户信息 */
+const handleAccountSaved = () => {
+  syncUserFromStore()
+}
 </script>
 
 <template>
@@ -239,9 +268,19 @@ onMounted(() => {
                   flexShrink: 0,
                   fontSize: '11px',
                   fontWeight: 600,
+                  overflow: 'hidden',
                 }"
               >
-                {{ currentUser.name ? currentUser.name.charAt(0) : '慕' }}
+                <template v-if="currentUser.avatar">
+                  <img
+                    :src="currentUser.avatar"
+                    alt="avatar"
+                    class="w-full h-full object-cover"
+                  />
+                </template>
+                <template v-else>
+                  {{ currentUser.name ? currentUser.name.charAt(0) : '慕' }}
+                </template>
               </a-avatar>
               <div class="flex flex-col min-w-0 ml-2 flex-1">
                 <span class="user-card-name">
@@ -286,7 +325,10 @@ onMounted(() => {
 
       <!-- ========= 全局弹窗挂载点位（从 views/components 引入） ========= -->
       <CreateAppFlow v-model:visible="dialogs.createApp" />
-      <AccountSettingsModal v-model:visible="dialogs.accountSettings" />
+      <AccountSettingsModal
+        v-model:visible="dialogs.accountSettings"
+        @saved="handleAccountSaved"
+      />
       <LogoutConfirmModal v-model:visible="dialogs.logoutConfirm" />
     </template>
   </div>

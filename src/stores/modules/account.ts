@@ -8,6 +8,7 @@ const initAccount = {
   name: '',
   email: '',
   avatar: '',
+  password_set: false,
   last_login_ip: '',
   last_login_at: 0,
   created_at: 0,

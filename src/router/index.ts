@@ -10,12 +10,15 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     component: DefaultLayout,
     children: [
-      // 首页
-      {
-        path: '',
-        name: ROUTE_NAME.HOME,
+       {
+          path: '',
+          redirect: 'home',
+        },
+        {
+          path: 'home',
+         name: ROUTE_NAME.HOME,
         component: () => import('@/views/home/index.vue'),
-      },
+        },
       // 个人空间（4个Tab：AI应用/插件/工作流/知识库）
       {
         path: 'space',
@@ -59,7 +62,7 @@ const routes: RouteRecordRaw[] = [
     component: BlankLayout,
     children: [
       {
-        path: 'login',
+        path: 'auth/login',
         name: ROUTE_NAME.LOGIN,
         component: () => import('@/views/auth/LoginView.vue'),
       },
@@ -83,8 +86,10 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to, _from) => {
-  // 未登录 → 强制跳转登录页（放行登录相关路由）
-  if (!isLogin && !['auth-login', 'auth-authorize'].includes(to.name as string)) {
+  // 登录相关路由（/auth/*）直接放行，避免守卫重定向死循环
+  if (to.path.startsWith('/auth')) return
+  // 未登录 → 强制跳转登录页
+  if (!isLogin()) {
     return { path: '/auth/login' }
   }
 })
