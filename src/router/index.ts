@@ -4,6 +4,7 @@ import DefaultLayout from '@/views/layouts/DefaultLayout.vue'
 import BlankLayout from '@/views/layouts/BlankLayout.vue'
 import { ROUTE_NAME } from '@/constants'
 import isLogin from '@/utils/auth'
+import { getCurrentUser } from '@/services/account'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -30,6 +31,18 @@ const routes: RouteRecordRaw[] = [
         path: 'plugin',
         name: ROUTE_NAME.PLUGIN,
         component: () => import('@/views/plugin/index.vue'),
+      },
+      // 应用广场（内置应用浏览，从模板添加到个人空间）
+      {
+        path: 'app-square',
+        name: ROUTE_NAME.APP_SQUARE,
+        component: () => import('@/views/app-square/index.vue'),
+      },
+      // 开放 API
+      {
+        path: 'openapi',
+        name: ROUTE_NAME.OPEN_API,
+        component: () => import('@/views/openapi/index.vue'),
       },
       // 知识库详情（知识库列表内嵌于个人空间第 4 个 Tab：/space?tab=knowledge）
       {
@@ -85,12 +98,26 @@ const router = createRouter({
   routes,
 })
 
+// 是否已在本次页面会话中完成服务端登录态校验
+// 直接输入URL / 刷新后的首次导航都会重新校验，防止本地残留的失效凭证绕过路由拦截
+let authVerified = false
+
 router.beforeEach(async (to, _from) => {
   // 登录相关路由（/auth/*）直接放行，避免守卫重定向死循环
   if (to.path.startsWith('/auth')) return
-  // 未登录 → 强制跳转登录页
+  // 本地预检：无凭证或本地时间戳已过期 → 强制跳转登录页
   if (!isLogin()) {
     return { path: '/auth/login' }
+  }
+  // 首次导航时向服务端校验凭证有效性，凭证失效则拦截回登录页
+  if (!authVerified) {
+    authVerified = true
+    try {
+      await getCurrentUser()
+    } catch {
+      // 凭证无效（401 时请求层已清理本地缓存），强制回登录页
+      return { path: '/auth/login' }
+    }
   }
 })
 

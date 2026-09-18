@@ -23,6 +23,8 @@ export const ROUTE_NAME = {
   KNOWLEDGE_DETAIL: 'KnowledgeDetail',
   KNOWLEDGE_DOCUMENT_DETAIL: 'KnowledgeDocumentDetail',
   KNOWLEDGE_ADD_FILE: 'KnowledgeAddFile',
+  OPEN_API: 'OpenApi',
+  APP_SQUARE: 'AppSquare',
 } as const
 
 /** 默认分页参数 */

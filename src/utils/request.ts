@@ -98,6 +98,13 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
         .then(async (res) => {
           // ✅ 优先拦截HTTP异常状态（404/500/403等）
           if (!res.ok) {
+            // 登录态失效（HTTP 401）：清理本地缓存并回登录页
+            if (res.status === 401) {
+              clearCredential()
+              clearAccount()
+              await router.replace({ path: '/auth/login' })
+              return reject(new Error('登录已失效'))
+            }
             const rawText = await res.text();
             console.log("HTTP异常响应文本：", rawText);
             Message.error(`请求错误：${res.status} ${res.statusText}`);
@@ -116,6 +123,7 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
             clearCredential()
             clearAccount()
             await router.replace({ path: '/auth/login' })
+            reject(new Error('登录已失效'))
           } else {
             Message.error(json.message);
             if (rejectOnBusinessError) {
@@ -264,9 +272,16 @@ export const upload = <T>(url: string, options: any = {}): Promise<T> => {
             clearCredential()
             clearAccount()
             await router.replace({ path: '/auth/login' })
+            reject(new Error('登录已失效'))
           } else {
             reject(xhr.response)
           }
+        } else if (xhr.status === 401) {
+          // 登录态失效（HTTP 401）：清理本地缓存并回登录页
+          clearCredential()
+          clearAccount()
+          await router.replace({ path: '/auth/login' })
+          reject(new Error('登录已失效'))
         } else {
           reject(xhr)
         }

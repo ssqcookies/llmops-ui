@@ -66,6 +66,8 @@ const detail = ref<DatasetDetail | null>(null)
 
 /** 召回测试抽屉 */
 const hitDrawerVisible = ref(false)
+/** 召回测试抽屉刷新信号（文档删改后 +1 触发联动） */
+const hitRefreshKey = ref(0)
 
 /** 重命名弹窗 */
 const renameVisible = ref(false)
@@ -138,6 +140,8 @@ const handleRenameSuccess = () => {
   // 刷新列表 + 详情统计
   listRefreshKey.value += 1
   fetchDetail()
+  // 刷新召回测试（如有打开）
+  hitRefreshKey.value += 1
 }
 
 /** 文档操作：删除（统一通过 Modal.confirm） */
@@ -154,6 +158,8 @@ const handleDelete = (item: DocumentItem) => {
         Message.success('删除成功')
         listRefreshKey.value += 1
         fetchDetail()
+        // 刷新召回测试（如有打开）
+        hitRefreshKey.value += 1
       } catch {
         Message.error('删除失败，请稍后重试')
       }
@@ -266,6 +272,7 @@ onMounted(() => {
       <HitTestDrawer
         v-model:visible="hitDrawerVisible"
         :dataset-id="datasetId"
+        :refresh-key="hitRefreshKey"
       />
 
       <RenameDocumentModal

@@ -63,7 +63,6 @@ const handleSubmit = async ({ errors }: { errors: Record<string, ValidatedError>
     // 4.3 发起账号密码登录，并且将loading设置为true
     passwordLoading.value = true
     const resp = await passwordLogin(loginForm.email, loginForm.password)
-    Message.success('登录成功，正在跳转')
     credentialStore.update(resp.data)
     await router.replace({ path: '/home' })
   } catch (error: any) {

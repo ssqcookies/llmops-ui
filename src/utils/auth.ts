@@ -8,6 +8,7 @@ import storage from './storage'
  */
 const isLogin = (): boolean => {
   const credential = storage.get('credential')
+    // 2.判断授权凭证上是否存在access_token，并判断token是否过期
 
   const now = Math.floor(Date.now() / 1000)
   if (
@@ -16,6 +17,8 @@ const isLogin = (): boolean => {
     !credential.expire_at ||
     credential.expire_at < now
   ) {
+      // 3.账号未登录，直接移除LocalStorage中的数据，涵盖用户数据+授权凭证
+
     storage.clear()
     return false
   }

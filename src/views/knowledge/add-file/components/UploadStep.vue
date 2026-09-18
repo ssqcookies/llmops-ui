@@ -82,41 +82,45 @@ const formatSize = (size: number): string => {
 
 <template>
   <div class="upload-step">
-    <!-- 拖拽上传区（自定义触发器使用 #upload-button 具名插槽） -->
-    <a-upload
-      draggable
-      multiple
-      :limit="MAX_FILE_COUNT"
-      :show-file-list="false"
-      accept=".pdf,.txt,.doc,.docx,.md"
-      :before-upload="handleBeforeUpload"
-      :custom-request="handleCustomRequest"
-      class="upload-zone"
-    >
-      <template #upload-button>
-        <div class="upload-trigger">
-          <icon-plus :size="22" class="upload-plus" />
-          <div class="upload-text">点击或拖拽文件到此处上传</div>
-          <div class="upload-hint">
-            支持PDF、TXT、DOC、DOCX、MD，最多可上传10个文件，每个文件不超过10MB
+    <!-- 拖拽上传区 —— 外层阴影卡片容器 -->
+    <div class="upload-card">
+      <a-upload
+        draggable
+        multiple
+        :limit="MAX_FILE_COUNT"
+        :show-file-list="false"
+        accept=".pdf,.txt,.doc,.docx,.md"
+        :before-upload="handleBeforeUpload"
+        :custom-request="handleCustomRequest"
+        class="upload-zone"
+      >
+        <template #upload-button>
+          <div class="upload-trigger">
+            <icon-plus :size="22" class="upload-plus" />
+            <div class="upload-text">点击或拖拽文件到此处上传</div>
+            <div class="upload-hint">
+              支持PDF、TXT、DOC、DOCX、MD，最多可上传10个文件，每个文件不超过10MB
+            </div>
+          </div>
+        </template>
+      </a-upload>
+    </div>
+
+    <!-- 已上传文件列表（在阴影卡片外，独立展示） -->
+    <template v-if="files.length > 0">
+      <div class="file-list">
+        <div v-for="file in files" :key="file.id" class="file-row">
+          <div class="file-badge">
+            <icon-file :size="13" />
+          </div>
+          <span class="file-name">{{ file.name }}</span>
+          <span class="file-size">{{ formatSize(file.size) }}</span>
+          <div class="file-remove" title="删除" @click="emit('remove', file.id)">
+            <icon-delete :size="15" />
           </div>
         </div>
-      </template>
-    </a-upload>
-
-    <!-- 已上传文件列表 -->
-    <div v-if="files.length > 0" class="file-list">
-      <div v-for="file in files" :key="file.id" class="file-row">
-        <div class="file-badge">
-          <icon-file :size="13" />
-        </div>
-        <span class="file-name">{{ file.name }}</span>
-        <span class="file-size">{{ formatSize(file.size) }}</span>
-        <div class="file-remove" title="删除" @click="emit('remove', file.id)">
-          <icon-delete :size="15" />
-        </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
@@ -128,7 +132,11 @@ const formatSize = (size: number): string => {
     @apply flex flex-col gap-4;
   }
 
-  /* ===== 拖拽上传区 ===== */
+  /* ===== 拖拽上传区阴影卡片容器 ===== */
+  .upload-card {
+    @apply rounded-[8px] bg-white border border-[#eef0f3]
+           shadow-[0_2px_8px_rgba(0,20,60,0.04)] p-4;
+  }
   .upload-zone {
     @apply w-full;
   }
@@ -152,7 +160,7 @@ const formatSize = (size: number): string => {
     @apply text-[12px] text-[#86909c];
   }
 
-  /* ===== 文件行 ===== */
+  /* ===== 文件列表 ===== */
   .file-list {
     @apply flex flex-col gap-2;
   }

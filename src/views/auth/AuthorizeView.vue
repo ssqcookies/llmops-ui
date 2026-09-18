@@ -2,7 +2,6 @@
 import { onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authorize } from '@/services/oauth'
-import { Message } from '@arco-design/web-vue'
 import { useCredentialStore } from '@/stores'
 
 // 1.定义页面所需的数据
@@ -14,7 +13,6 @@ onMounted(async () => {
   try {
     // 1.调用authorize接口进行登录
     const resp = await authorize(route.params?.provider_name as string, route.query?.code as string)
-    Message.success('登录成功，正在跳转')
 
     // 2.更新用户授权数据并跳转到首页
     credentialStore.update(resp.data)

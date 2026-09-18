@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+/** 召回测试 Modal —— 按原型图重写：左右分栏，左源文本+最近查询表格，右命中卡片网格 */
+import { ref, reactive, computed, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { hit, getDatasetQueries } from '@/services/dataset'
 import type { HitRequest } from '@/models/dataset'
 import RetrievalSettingPopover from './RetrievalSettingPopover.vue'
+import SegmentDetailModal from './SegmentDetailModal.vue'
 import HitCard from './HitCard.vue'
 
 // ============================================================
@@ -13,6 +15,7 @@ import HitCard from './HitCard.vue'
 /** 命中结果项 —— 对齐 HitResponse data 元素 */
 interface HitItem {
   id: string
+  content?: string
   document: {
     id: string
     name: string
@@ -38,12 +41,15 @@ interface HitItem {
 interface QueryRecord {
   id: string
   query: string
+  /** 查询来源标识（hit_testing / query 等） */
   source: string
   dataset_id: string
   created_at: number
+  /** 本次查询命中的 Top1 文档名（可选，后端补字段） */
+  top_document?: string
 }
 
-/** 检索配置（对齐 HitRequest 的 retrieval_strategy/k/score，不含 query） */
+/** 检索配置 */
 interface RetrievalConfig {
   retrieval_strategy: string
   k: number
@@ -57,6 +63,8 @@ interface RetrievalConfig {
 const props = defineProps<{
   visible: boolean
   datasetId: string
+  /** 外部刷新信号：父组件增 1 时清缓存 + 重拉 queries（文档删改后联动） */
+  refreshKey?: number
 }>()
 
 const emit = defineEmits<{
@@ -67,21 +75,30 @@ const emit = defineEmits<{
 // 状态
 // ============================================================
 
-/** 查询输入 */
+/** 源文本 */
 const queryInput = ref('')
+/** 字数上限 */
+const MAX_QUERY_LEN = 200
 /** 命中结果 */
 const hitList = ref<HitItem[]>([])
 /** 最近查询记录 */
 const recentQueries = ref<QueryRecord[]>([])
-/** 加载命中 */
+/** 加载状态 */
 const hitLoading = ref(false)
-/** 加载最近查询 */
 const queriesLoading = ref(false)
+/** 检索设置 Modal 可见性 */
+const settingVisible = ref(false)
+/** 片段详情 Modal 可见性 */
+const segmentDetailVisible = ref(false)
+const currentSegment = ref<HitItem | null>(null)
 
-/** 检索设置弹层可见性 */
-const settingPopoverVisible = ref(false)
+/**
+ * 查询结果缓存：query 文本 → hit 结果列表
+ * 点击最近查询时优先读缓存，避免重复请求
+ */
+const hitCache = new Map<string, HitItem[]>()
 
-/** 检索配置（默认值：混合检索 + k=3 + score=0.5） */
+/** 检索配置（默认：混合检索 + k=3 + score=0.5） */
 const retrievalConfig = reactive<RetrievalConfig>({
   retrieval_strategy: 'hybrid',
   k: 3,
@@ -92,15 +109,48 @@ const retrievalConfig = reactive<RetrievalConfig>({
 // 计算属性
 // ============================================================
 
-const isEmptyHits = computed(
-  () => !hitLoading.value && hitList.value.length === 0 && queryInput.value,
-)
+/** 字数 */
+const queryLen = computed(() => queryInput.value.length)
 
 const hasSearched = computed(() => !!queryInput.value)
+
+const isEmptyHits = computed(
+  () => !hitLoading.value && hitList.value.length === 0 && hasSearched.value,
+)
 
 // ============================================================
 // 方法
 // ============================================================
+
+/** 格式化时间戳 → MM-DD HH:mm */
+const formatTime = (ts: number): string => {
+  if (!ts) return '-'
+  const d = new Date(ts * 1000)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  return `${mm}-${dd} ${hh}:${mi}`
+}
+
+/** 数据源列显示：优先 top_document（命中文档名），fallback source 友好名 */
+const getSourceDisplay = (record: QueryRecord): string => {
+  if (record.top_document) return record.top_document
+  const map: Record<string, string> = {
+    hit_testing: 'Hit Testing',
+    HitTesting: 'Hit Testing',
+    query: 'Query',
+    Query: 'Query',
+    app_testing: '应用测试',
+  }
+  const src = record.source ?? ''
+  if (src && map[src]) return map[src]
+  return src || '-'
+}
+
+/** 生成缓存 key：query + 检索配置，保证不同策略下互不污染 */
+const buildCacheKey = (query: string, cfg: RetrievalConfig) =>
+  `${query}::${cfg.retrieval_strategy}::${cfg.k}::${cfg.score}`
 
 /** 触发召回测试 */
 const handleHit = async () => {
@@ -110,6 +160,14 @@ const handleHit = async () => {
     return
   }
   if (!props.datasetId) return
+
+  // 命中前先查缓存（同 query + 同检索配置）
+  const cacheKey = buildCacheKey(query, retrievalConfig)
+  if (hitCache.has(cacheKey)) {
+    hitList.value = hitCache.get(cacheKey)!
+    return
+  }
+
   hitLoading.value = true
   try {
     const req: HitRequest = {
@@ -119,9 +177,9 @@ const handleHit = async () => {
       score: retrievalConfig.score,
     }
     const res = await hit(props.datasetId, req)
-    hitList.value = (res?.data ?? []) as HitItem[]
-    // 拉取最新最近查询
-    fetchRecentQueries()
+    const list = (res?.data ?? []) as HitItem[]
+    hitList.value = list
+    hitCache.set(cacheKey, list)
   } catch {
     hitList.value = []
   } finally {
@@ -143,7 +201,10 @@ const fetchRecentQueries = async () => {
   }
 }
 
-/** 点击最近查询项 → 复用查询 */
+/**
+ * 点击最近查询记录 → 复用该查询的命中结果
+ * 优先读 hitCache（当前会话内已测过的 query），没有才重新请求
+ */
 const handlePickQuery = (record: QueryRecord) => {
   queryInput.value = record.query
   handleHit()
@@ -154,205 +215,268 @@ const handleConfigUpdate = (config: RetrievalConfig) => {
   retrievalConfig.retrieval_strategy = config.retrieval_strategy
   retrievalConfig.k = config.k
   retrievalConfig.score = config.score
-  settingPopoverVisible.value = false
-  if (queryInput.value) handleHit()
+  if (hasSearched.value) handleHit()
 }
 
-/** 关闭抽屉 */
+/** 点击命中卡片 → 打开片段详情 */
+const handleCardClick = (item: HitItem) => {
+  currentSegment.value = item
+  segmentDetailVisible.value = true
+}
+
+/** 关闭 Modal */
 const handleClose = () => {
   emit('update:visible', false)
 }
 
-/** 抽屉打开时重置并拉取最近查询 */
+/** Modal 打开时重置 */
 watch(
   () => props.visible,
   (val) => {
     if (!val) return
     queryInput.value = ''
     hitList.value = []
+    hitCache.clear()
     fetchRecentQueries()
   },
 )
 
-// ============================================================
-// 生命周期
-// ============================================================
-
-onMounted(() => {
-  if (props.visible) fetchRecentQueries()
-})
+/**
+ * 外部刷新信号：文档删改后，父组件会增 1 触发这里
+ * - Modal 打开时：清 hitCache + 重拉 queries 列表
+ * - Modal 关闭时：下次打开 watch visible 已经会完整刷新
+ */
+watch(
+  () => props.refreshKey,
+  () => {
+    if (!props.visible) return
+    hitCache.clear()
+    fetchRecentQueries()
+  },
+)
 </script>
 
 <template>
-  <a-drawer
+  <a-modal
     :visible="visible"
-    :width="720"
-    :mask-closable="true"
+    :width="1100"
     :footer="false"
+    :mask-closable="true"
     :unmount-on-close="true"
-    class="hit-drawer"
+    :body-style="{ padding: 0 }"
+    :hide-title="true"
+    :closable="false"
+    class="hit-modal"
     @cancel="handleClose"
-    @close="handleClose"
   >
-    <template #title>
-      <span class="drawer-title">召回测试</span>
-    </template>
+    <!-- 标题栏 -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-[#f2f3f5]">
+      <div class="flex flex-col gap-0.5">
+        <span class="text-[18px] font-semibold text-[#1d2129]">召回测试</span>
+        <span class="text-[13px] text-[#86909c]">基于给定的查询文本测试知识库的召回效果</span>
+      </div>
+      <div
+        class="w-8 h-8 flex items-center justify-center text-[#86909c] rounded-[4px] cursor-pointer hover:bg-[#f2f3f5] hover:text-[#1d2129] transition-colors"
+        @click="handleClose"
+      >
+        <icon-close :size="18" />
+      </div>
+    </div>
 
-    <div class="hit-body">
-      <!-- ============== 1. 顶部：查询输入 + 检索设置 ============== -->
-      <div class="hit-toolbar">
-        <a-input
-          v-model="queryInput"
-          placeholder="请输入查询内容"
-          allow-clear
-          class="hit-query-input"
-          @press-enter="handleHit"
-        >
-          <template #prefix>
-            <a-button type="text" class="hit-search-btn" @click="handleHit">
-              <icon-search />
+    <!-- 主体：左右分栏 -->
+    <div class="flex items-stretch h-[560px]">
+      <!-- ============ 左栏 ============ -->
+      <div
+        class="w-[42%] min-w-[440px] flex flex-col gap-4 p-5 border-r border-[#f2f3f5]"
+      >
+        <!-- 源文本卡片 -->
+        <div class="flex flex-col bg-white rounded-[8px] border border-[#e5e6eb] p-4">
+          <!-- 卡片头 -->
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-[15px] font-semibold text-[#1d2129]">源文本</span>
+            <a-button type="outline" size="mini" class="strategy-btn">
+              <template #icon><icon-thunderbolt /></template>
+              向量检索
             </a-button>
-          </template>
-        </a-input>
+          </div>
 
-        <RetrievalSettingPopover
-          v-model:visible="settingPopoverVisible"
-          :config="retrievalConfig"
-          @update="handleConfigUpdate"
-        />
+          <!-- 文本输入区 -->
+          <div class="flex-1">
+            <a-textarea
+              v-model="queryInput"
+              :max-length="MAX_QUERY_LEN"
+              :auto-size="{ minRows: 8, maxRows: 10 }"
+              placeholder="请输入文本，建议使用简短的陈述句"
+              class="source-textarea"
+            />
+          </div>
+
+          <!-- 底部：字数 + 测试按钮 + 设置 -->
+          <div class="flex items-center justify-between mt-3">
+            <span class="text-[12px] text-[#86909c]">{{ queryLen }}/{{ MAX_QUERY_LEN }}</span>
+            <div class="flex items-center gap-1">
+              <!-- 检索设置 -->
+              <a-button
+                type="text"
+                size="mini"
+                class="setting-btn"
+                @click="settingVisible = true"
+              >
+                <template #icon><icon-settings /></template>
+              </a-button>
+              <!-- 测试按钮 -->
+              <a-button
+                type="primary"
+                size="small"
+                class="rounded-[6px] h-[28px] px-4"
+                :loading="hitLoading"
+                :disabled="queryLen === 0"
+                @click="handleHit"
+              >
+                测试
+              </a-button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 最近查询表格 -->
+        <div
+          class="flex flex-col flex-1 bg-white rounded-[8px] border border-[#eef0f3] overflow-hidden"
+        >
+          <div
+            class="px-4 py-3 text-[14px] font-semibold text-[#1d2129] border-b border-[#f2f3f5]"
+          >
+            最近查询
+          </div>
+          <div class="flex flex-col flex-1 overflow-hidden">
+            <!-- 表头：Grid + Tailwind -->
+            <div class="table-head">
+              <span class="truncate">数据源</span>
+              <span class="truncate">文本</span>
+              <span class="text-right">时间</span>
+            </div>
+            <a-spin v-if="queriesLoading" :loading="true" class="py-8 flex items-center justify-center" />
+            <div v-else-if="recentQueries.length === 0" class="py-8 text-center text-[13px] text-[#86909c]">
+              暂无查询记录
+            </div>
+            <div v-else class="flex flex-col overflow-y-auto">
+              <div
+                v-for="item in recentQueries"
+                :key="item.id"
+                class="table-row border-b border-[#f7f8fa] last:border-b-0 cursor-pointer hover:bg-[#f2f7ff]"
+                @click="handlePickQuery(item)"
+              >
+                <span class="truncate text-[12px] text-[#4e5969]">{{ getSourceDisplay(item) }}</span>
+                <span class="text-[13px] text-[#1d2129] truncate">{{ item.query }}</span>
+                <span class="text-right text-[12px] text-[#86909c]">{{ formatTime(item.created_at) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <!-- ============== 2. 最近查询 ============== -->
-      <section v-if="recentQueries.length > 0" class="recent-section">
-        <div class="section-label">最近查询</div>
-        <div class="recent-chips">
-          <span
-            v-for="item in recentQueries"
-            :key="item.id"
-            class="recent-chip"
-            @click="handlePickQuery(item)"
-          >
-            <icon-history class="chip-icon" />
-            <span class="chip-text">{{ item.query }}</span>
-          </span>
-        </div>
-      </section>
+      <!-- ============ 右栏 ============ -->
+      <div class="flex-1 p-5 overflow-y-auto">
+        <a-spin v-if="hitLoading" :loading="true" class="h-full flex items-center justify-center" tip="检索中..." />
 
-      <!-- ============== 3. 命中结果列表 ============== -->
-      <section class="hit-result-section">
-        <div class="section-head">
-          <span class="section-label">命中结果</span>
-          <span v-if="hitList.length > 0" class="section-count">
-            共 {{ hitList.length }} 条
-          </span>
+        <!-- 空状态 -->
+        <div v-else-if="isEmptyHits" class="flex flex-col items-center justify-center py-16 gap-3">
+          <icon-search class="text-[40px] text-[#c9cdd4]" />
+          <span class="text-[14px] text-[#86909c]">未找到相关结果</span>
         </div>
 
-        <a-spin v-if="hitLoading" :loading="true" class="hit-spin" tip="检索中..." />
-
-        <div v-if="isEmptyHits && !hitLoading" class="hit-empty">
-          <icon-search class="empty-icon" />
-          <span class="empty-text">未找到相关结果</span>
+        <!-- 初始占位 -->
+        <div v-else-if="!hasSearched" class="flex flex-col items-center justify-center py-16 gap-3">
+          <icon-search class="text-[40px] text-[#c9cdd4]" />
+          <span class="text-[14px] text-[#86909c]">输入查询内容并点击「测试」进行召回测试</span>
         </div>
 
-        <div v-if="!hitLoading && hitList.length > 0" class="hit-list">
+        <!-- 命中卡片网格 -->
+        <div v-else class="grid grid-cols-2 gap-3">
           <HitCard
-            v-for="(item, idx) in hitList"
+            v-for="item in hitList"
             :key="item.id"
             :item="item"
-            :index="idx + 1"
+            @click="handleCardClick"
           />
         </div>
-
-        <div v-if="!hasSearched && !hitLoading" class="hit-placeholder">
-          <icon-search class="placeholder-icon" />
-          <span class="placeholder-text">输入查询内容并点击搜索按钮进行召回测试</span>
-        </div>
-      </section>
+      </div>
     </div>
-  </a-drawer>
+
+    <!-- ============== 子组件挂载点 ============== -->
+    <RetrievalSettingPopover
+      v-model:visible="settingVisible"
+      :config="retrievalConfig"
+      @update="handleConfigUpdate"
+    />
+    <SegmentDetailModal
+      v-model:visible="segmentDetailVisible"
+      :item="currentSegment"
+    />
+  </a-modal>
 </template>
 
 <style scoped lang="css">
-@import 'tailwindcss';
+/* ===== Grid 列模板 —— 表头与表行共用，保证精确对齐 =====
+   Tailwind class 无法表达 grid-template-columns，必须原生 CSS */
+.table-head,
+.table-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 100px;
+  column-gap: 12px;
+  align-items: center;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+.table-head {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  font-size: 12px;
+  color: #86909c;
+  background: #fafbfc;
+}
+.table-row {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
 
-@layer components {
-  .drawer-title {
-    @apply text-[16px] font-semibold text-[#1d2129];
-  }
-
-  .hit-body {
-    @apply flex flex-col gap-5;
-  }
-
-  /* ===== 顶部工具栏 ===== */
-  .hit-toolbar {
-    @apply flex items-center gap-3;
-  }
-  .hit-query-input {
-    @apply flex-1;
-  }
-  .hit-query-input :deep(.arco-input-wrapper) {
-    @apply rounded-[6px] h-[36px];
-  }
-  .hit-search-btn {
-    @apply h-7 w-7 flex items-center justify-center text-[#86909c] hover:text-[#165dff] !p-0;
-  }
-
-  /* ===== 最近查询区 ===== */
-  .recent-section {
-    @apply flex flex-col gap-2;
-  }
-  .section-label {
-    @apply text-[13px] font-medium text-[#4e5969] leading-5;
-  }
-  .recent-chips {
-    @apply flex flex-wrap gap-2;
-  }
-  .recent-chip {
-    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-[16px]
-           bg-[#f2f3f5] text-[#4e5969] text-[12px] cursor-pointer
-           hover:bg-[#e8f3ff] hover:text-[#165dff] transition-colors;
-  }
-  .chip-icon {
-    @apply text-[12px] text-[#86909c];
-  }
-  .chip-text {
-    @apply truncate max-w-[200px];
-  }
-
-  /* ===== 命中结果区 ===== */
-  .hit-result-section {
-    @apply flex flex-col gap-3 flex-1 min-h-[300px];
-  }
-  .section-head {
-    @apply flex items-center justify-between;
-  }
-  .section-count {
-    @apply text-[12px] text-[#86909c];
-  }
-  .hit-spin {
-    @apply flex items-center justify-center w-full py-12;
-  }
-  .hit-empty {
-    @apply flex flex-col items-center justify-center py-12 gap-3;
-  }
-  .empty-icon {
-    @apply text-[36px] text-[#c9cdd4];
-  }
-  .empty-text {
-    @apply text-[14px] text-[#86909c];
-  }
-  .hit-list {
-    @apply flex flex-col gap-3;
-  }
-  .hit-placeholder {
-    @apply flex flex-col items-center justify-center py-16 gap-3;
-  }
-  .placeholder-icon {
-    @apply text-[40px] text-[#c9cdd4];
-  }
-  .placeholder-text {
-    @apply text-[14px] text-[#86909c];
-  }
+/* ===== :deep() 穿透 Arco Design 组件 ===== */
+.hit-modal :deep(.arco-modal-body) {
+  padding: 0;
+}
+.hit-modal :deep(.arco-modal-content) {
+  border-radius: 8px;
+  overflow: hidden;
+}
+.strategy-btn :deep(.arco-btn) {
+  border-radius: 12px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.source-textarea :deep(.arco-textarea-wrapper) {
+  border-radius: 6px;
+  background: #f7f8fa;
+  border-color: transparent;
+  transition: border-color 0.2s;
+}
+.source-textarea :deep(.arco-textarea-wrapper:hover) {
+  border-color: transparent;
+}
+.source-textarea :deep(.arco-textarea-wrapper:focus-within) {
+  border-color: #165dff;
+}
+.source-textarea :deep(.arco-textarea) {
+  background: transparent;
+  font-size: 13px;
+  line-height: 20px;
+}
+.setting-btn :deep(.arco-btn) {
+  padding: 0 4px;
+  height: 28px;
+  color: #86909c;
+}
+.setting-btn :deep(.arco-btn:hover) {
+  color: #165dff;
 }
 </style>

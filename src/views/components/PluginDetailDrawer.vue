@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { PluginDetail, ToolParam } from '@/models/plugin'
 
 const props = defineProps<{
@@ -15,19 +15,21 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:visible', val: boolean): void
-  (e: 'close'): void
   (e: 'edit'): void
 }>()
 
+/** 当前已展开参数的工具ID集合（卡片默认折叠，点击切换） */
+const expandedToolIds = ref<Set<string>>(new Set())
+
+/** 切换插件详情时重置展开状态 */
 watch(
-  () => props.visible,
-  (val) => {
-    if (!val) {
-      emit('close')
-    }
+  () => props.detail?.pluginId,
+  () => {
+    expandedToolIds.value = new Set()
   },
 )
 
+/** Arco Drawer 点 X / 遮罩 / ESC 均触发 cancel，受控模式下需手动回写 visible */
 const handleClose = () => {
   emit('update:visible', false)
 }
@@ -35,6 +37,19 @@ const handleClose = () => {
 const handleEdit = () => {
   emit('edit')
 }
+
+/** 切换工具卡片展开/折叠 */
+const toggleTool = (toolId: string) => {
+  const next = new Set(expandedToolIds.value)
+  if (next.has(toolId)) {
+    next.delete(toolId)
+  } else {
+    next.add(toolId)
+  }
+  expandedToolIds.value = next
+}
+
+const isExpanded = (toolId: string) => expandedToolIds.value.has(toolId)
 
 /** 必填参数判断 */
 const isRequired = (p: ToolParam) => !!p.required
@@ -53,7 +68,7 @@ const toolCountText = computed(() => {
     :width="520"
     :footer="false"
     :mask-closable="true"
-    @before-close="handleClose"
+    @cancel="handleClose"
   >
     <!-- 骨架/空态：未加载 -->
     <a-spin
@@ -64,15 +79,15 @@ const toolCountText = computed(() => {
     />
 
     <!-- 详情主体 -->
-    <div v-else-if="detail" class="flex flex-col gap-6 h-full w-full">
+    <div v-else-if="detail" class="flex flex-col gap-5 h-full w-full">
       <!-- 1. 头部：图标 + 插件名 + 提供商 + 工具数 -->
-      <div class="flex items-start gap-4 pb-4 border-b border-[#eef0f3]">
+      <div class="flex items-start gap-4">
         <div class="shrink-0 w-[52px] h-[52px] drawer-icon rounded-[10px] overflow-hidden">
           <img
             :src="detail.icon"
             :alt="detail.name"
             class="w-full h-full object-cover"
-          />
+          >
         </div>
         <div class="flex flex-col gap-1.5 min-w-0 flex-1">
           <h3 class="drawer-plugin-name">{{ detail.name }}</h3>
@@ -85,21 +100,9 @@ const toolCountText = computed(() => {
       </div>
 
       <!-- 2. 插件描述区（不截断多行） -->
-      <div class="flex flex-col gap-2">
-        <p class="drawer-desc-text">{{ detail.description }}</p>
+      <p class="drawer-desc-text">{{ detail.description }}</p>
 
-        <!-- 使用限制提示（特殊样式标注） -->
-        <a-alert
-          v-if="detail.usageWarning && detail.usageWarning.length"
-          type="warning"
-          :show-icon="true"
-          class="mt-1"
-        >
-          <template #content>{{ detail.usageWarning }}</template>
-        </a-alert>
-      </div>
-
-      <!-- 编辑按钮（仅 editable 模式） -->
+      <!-- 编辑按钮（仅 editable 模式：个人空间插件 tab） -->
       <a-button
         v-if="editable"
         type="outline"
@@ -112,58 +115,63 @@ const toolCountText = computed(() => {
       </a-button>
 
       <!-- 3. 工具列表区 -->
-      <div class="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1 scrollbar-w-none">
+      <div class="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1">
         <span class="tool-list-title">{{ toolCountText }}</span>
 
-        <div class="flex flex-col gap-3">
-          <div
-            v-for="tool in detail.tools"
-            :key="tool.toolId"
-            class="tool-card"
-          >
-            <div class="flex flex-col gap-1.5 mb-2">
-              <h4 class="tool-card-name">{{ tool.name }}</h4>
-              <p class="tool-card-desc">{{ tool.description }}</p>
-            </div>
+        <div
+          v-for="tool in detail.tools"
+          :key="tool.toolId"
+          class="tool-card"
+          :class="{ 'tool-card-expanded': isExpanded(tool.toolId) }"
+          @click="toggleTool(tool.toolId)"
+        >
+          <!-- 卡片头部：名称 + 描述（常驻） -->
+          <div class="flex flex-col gap-1.5">
+            <h4 class="tool-card-name">{{ tool.name }}</h4>
+            <p class="tool-card-desc">{{ tool.description }}</p>
+          </div>
 
-            <!-- 参数列表（仅当有参数时显示） -->
-            <div v-if="tool.params && tool.params.length" class="flex flex-col gap-0">
-              <div class="tool-param-header">
-                <span>参数</span>
-                <span class="tool-param-divider" />
-              </div>
-              <div
-                v-for="p in tool.params"
-                :key="p.name"
-                class="tool-param-row"
-              >
-                <div class="flex items-center gap-2 flex-wrap">
-                  <span class="tool-param-name">{{ p.name }}</span>
-                  <a-tag
-                    size="small"
-                    color="grey"
-                    :bordered="false"
-                    class="tool-param-type"
-                  >
-                    {{ p.type }}
-                  </a-tag>
-                  <a-tag
-                    v-if="isRequired(p)"
-                    size="small"
-                    color="red"
-                    :bordered="false"
-                    class="tool-param-required"
-                  >
-                    必填
-                  </a-tag>
-                </div>
-                <p
-                  v-if="p.description"
-                  class="tool-param-desc"
+          <!-- 参数列表（点击卡片展开后显示） -->
+          <div
+            v-if="isExpanded(tool.toolId) && tool.params && tool.params.length"
+            class="tool-params"
+            @click.stop
+          >
+            <div class="tool-param-header">
+              <span>参数</span>
+              <span class="tool-param-divider" />
+            </div>
+            <div
+              v-for="p in tool.params"
+              :key="p.name"
+              class="tool-param-row"
+            >
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="tool-param-name">{{ p.name }}</span>
+                <a-tag
+                  size="small"
+                  color="gray"
+                  :bordered="false"
+                  class="tool-param-type"
                 >
-                  {{ p.description }}
-                </p>
+                  {{ p.type }}
+                </a-tag>
+                <a-tag
+                  v-if="isRequired(p)"
+                  size="small"
+                  color="red"
+                  :bordered="false"
+                  class="tool-param-required"
+                >
+                  必填
+                </a-tag>
               </div>
+              <p
+                v-if="p.description"
+                class="tool-param-desc"
+              >
+                {{ p.description }}
+              </p>
             </div>
           </div>
         </div>
@@ -196,7 +204,8 @@ const toolCountText = computed(() => {
     @apply w-[3px] h-[3px] rounded-full bg-[#c9cdd4] inline-block;
   }
   .drawer-desc-text {
-    @apply text-[13px] text-[#4e5969] leading-[1.75] whitespace-pre-wrap m-0;
+    @apply text-[13px] text-[#4e5969] leading-[1.75] whitespace-pre-wrap m-0
+           pb-5 border-b border-[#eef0f3];
   }
   .edit-btn {
     @apply w-full rounded-[6px] h-[38px];
@@ -206,22 +215,30 @@ const toolCountText = computed(() => {
   }
 
   .tool-list-title {
-    @apply text-[12px] text-[#4e5969] font-medium leading-5;
+    @apply text-[13px] text-[#86909c] leading-5;
   }
   .tool-card {
-    @apply bg-[#fafbfc] rounded-[10px] border border-[#eef0f3] p-4;
+    @apply bg-white rounded-[10px] border border-[#e5e6eb] p-4
+           cursor-pointer transition-colors
+           hover:border-[#165dff];
+  }
+  .tool-card-expanded {
+    @apply border-[#165dff];
   }
   .tool-card-name {
-    @apply text-[14px] font-semibold text-[#1d2129] leading-5 m-0;
+    @apply text-[15px] font-semibold text-[#1d2129] leading-6 m-0;
   }
   .tool-card-desc {
-    @apply text-[12px] text-[#4e5969] leading-[1.7] m-0;
+    @apply text-[13px] text-[#4e5969] leading-[1.7] m-0;
+  }
+  .tool-params {
+    @apply mt-3 pt-1;
   }
   .tool-param-header {
-    @apply flex items-center gap-2 mt-2 mb-1.5;
+    @apply flex items-center gap-2 mb-1.5;
   }
   .tool-param-header > span:first-child {
-    @apply text-[11px] text-[#86909c] font-medium;
+    @apply text-[12px] text-[#86909c];
   }
   .tool-param-divider {
     @apply flex-1 h-px bg-[#eef0f3] inline-block;
@@ -230,13 +247,13 @@ const toolCountText = computed(() => {
     @apply flex flex-col gap-0.5 py-1.5;
   }
   .tool-param-name {
-    @apply text-[12px] text-[#1d2129] font-medium;
+    @apply text-[13px] text-[#1d2129] font-medium;
   }
   .tool-param-type {
-    @apply text-[11px] rounded-[10px] !px-2 !py-0;
+    @apply text-[12px] !px-2 !py-0;
   }
   .tool-param-required {
-    @apply text-[11px] rounded-[10px] !px-2 !py-0;
+    @apply text-[12px] !px-2 !py-0;
   }
   .tool-param-desc {
     @apply pl-0 text-[12px] text-[#86909c] leading-[1.6] m-0;

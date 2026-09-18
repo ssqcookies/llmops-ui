@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RouteLocationRaw } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
@@ -25,7 +25,13 @@ import {
   updateDataset,
   deleteDataset,
 } from '@/services/dataset'
-import { MOCK_APPS, MOCK_WORKFLOWS } from '@/mock/personalSpace'
+import {
+  getAppsWithPage,
+  deleteApp,
+  copyApp,
+} from '@/services/app'
+import { getWorkflowsWithPage, deleteWorkflow } from '@/services/workflow'
+import { MOCK_WORKFLOWS } from '@/mock/personalSpace'
 import AppsGridCard from './components/AppsGridCard.vue'
 import PluginsGridCard from './components/PluginsGridCard.vue'
 import WorkflowsGridCard from './components/WorkflowsGridCard.vue'
@@ -33,7 +39,12 @@ import KnowledgeGridCard from './components/KnowledgeGridCard.vue'
 import KnowledgeFormModal from './components/KnowledgeFormModal.vue'
 import PluginEditorModal from '../components/PluginEditorModal.vue'
 import PluginDetailDrawer from '../components/PluginDetailDrawer.vue'
+import CreateAppModal from '../components/CreateAppModal.vue'
+import CreateWorkflowModal from '../components/CreateWorkflowModal.vue'
 import { ROUTE_NAME } from '@/constants'
+import { useAccountStore } from '@/stores'
+
+const accountStore = useAccountStore()
 
 // ============================================================
 // 常量
@@ -95,6 +106,30 @@ const knowledgeList = ref<DatasetListItem[]>([])
 
 /** 知识库实际生效搜索词（回车/清除同步，走接口检索） */
 const knowledgeSearchWord = ref('')
+
+/** AI应用实际生效搜索词（回车/清除同步，走接口检索） */
+const appSearchWord = ref('')
+
+/** AI应用创建/编辑弹窗 */
+const createAppModalVisible = ref(false)
+const createAppMode = ref<'create' | 'edit'>('create')
+const editingApp = ref<{
+  id: string
+  name: string
+  icon: string
+  description: string
+} | null>(null)
+
+/** 工作流创建/编辑弹窗 */
+const createWorkflowModalVisible = ref(false)
+const workflowModalMode = ref<'create' | 'edit'>('create')
+const editingWorkflow = ref<{
+  id: string
+  name: string
+  tool_call_name: string
+  icon: string
+  description: string
+} | null>(null)
 
 /** 个人空间-插件创建弹窗可见性 */
 const createPluginModalVisible = ref(false)
@@ -205,19 +240,97 @@ const fetchKnowledgeList = async () => {
   }
 }
 
-/** 拉取当前 Tab 列表（AI应用/工作流为演示 Mock，插件/知识库走真实服务） */
+/** 拉取 AI应用列表（走 app 服务，支持接口检索） */
+const fetchAppList = async () => {
+  loading.value = true
+  try {
+    const res = await getAppsWithPage({
+      current_page: 1,
+      page_size: 20,
+      search_word: appSearchWord.value,
+    })
+    appList.value = (res?.data?.list ?? []).map((a) => {
+      // 模型信息清洗：过滤空值和占位值
+      const cfg = a.model_config
+      const PLACEHOLDERS = new Set(['assistant', 'default', 'unknown', '未设置', ''])
+      const provider = ((cfg?.provider || '').trim()).toLowerCase()
+      const model = ((cfg?.model || '').trim()).toLowerCase()
+      const pValid = provider && !PLACEHOLDERS.has(provider.toLowerCase())
+      const mValid = model && !PLACEHOLDERS.has(model.toLowerCase())
+      let modelInfo = ''
+      if (pValid && mValid) modelInfo = `${cfg.provider} · ${cfg.model}`
+      else if (pValid) modelInfo = cfg.provider
+      else if (mValid) modelInfo = cfg.model
+      else modelInfo = cfg?.provider || cfg?.model || ''
+
+      return {
+        id: a.id,
+        icon: a.icon,
+        name: a.name,
+        description: a.description,
+        modelInfo,
+        owner: { name: accountStore.account.name || '我', avatar: accountStore.account.avatar || '' },
+        lastEditTime: formatTimestamp(a.updated_at),
+        verified: a.status === 'published',
+        // 来源字段：后端返回则用后端值，否则根据 preset_prompt 是否存在做启发式判断
+        source: a.source || (a.preset_prompt ? 'builtin' : 'custom'),
+      }
+    })
+  } catch {
+    appList.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 拉取工作流列表（走 workflow 服务） */
+const fetchWorkflowList = async () => {
+  loading.value = true
+  try {
+    const res = await getWorkflowsWithPage({ current_page: 1, page_size: 50 })
+    workflowList.value = (res?.data?.list ?? []).map((w) => ({
+      id: w.id,
+      name: w.name,
+      icon: w.icon,
+      description: w.description,
+      workflowName: w.tool_call_name,
+      nodeCount: w.node_count,
+      status: w.status as 'draft' | 'published',
+      verified: w.status === 'published',
+      owner: {
+        name: accountStore.account.name || '我',
+        avatar: accountStore.account.avatar || '',
+      },
+      lastEditTime: formatTimestamp(w.updated_at),
+    }))
+  } catch {
+    workflowList.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 时间戳格式化为 MM-DD HH:mm */
+const formatTimestamp = (ts: number): string => {
+  if (!ts) return '—'
+  const d = new Date(ts * 1000)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  return `${mm}-${dd} ${hh}:${mi}`
+}
+
+/** 拉取当前 Tab 列表（插件 mock，工作流真实接口，知识库真实接口） */
 const fetchTabLists = async () => {
   loading.value = true
   try {
-    const [apps, plugins, knowledge] = await Promise.all([
-      Promise.resolve(MOCK_APPS),
+    const [plugins] = await Promise.all([
       fetchPersonalPlugins(),
-      getDatasetsWithPage(1, 20, knowledgeSearchWord.value).catch(() => null),
     ])
-    appList.value = apps
     pluginList.value = plugins
-    workflowList.value = MOCK_WORKFLOWS
-    knowledgeList.value = (knowledge?.data?.list ?? []) as DatasetListItem[]
+    fetchWorkflowList()
+    fetchKnowledgeList()
   } finally {
     loading.value = false
   }
@@ -236,7 +349,13 @@ const onSearchEnter = () => {
     fetchKnowledgeList()
     return
   }
-  // 其余 Tab：computed 本地即时过滤，此处仅提示（后续可替换为服务端检索）
+  // AI应用 Tab：走接口检索
+  if (activeTab.value === 'apps') {
+    appSearchWord.value = searchInput.value.trim()
+    fetchAppList()
+    return
+  }
+  // 其余 Tab：computed 本地即时过滤
   Message.info(`搜索：${searchInput.value || '(空)'}`)
 }
 /** 搜索清除 */
@@ -245,6 +364,10 @@ const onSearchClear = () => {
   if (activeTab.value === 'knowledge') {
     knowledgeSearchWord.value = ''
     fetchKnowledgeList()
+  }
+  if (activeTab.value === 'apps') {
+    appSearchWord.value = ''
+    fetchAppList()
   }
 }
 /** 点击搜索图标 */
@@ -262,7 +385,19 @@ const onCreateClick = () => {
     knowledgeModalVisible.value = true
     return
   }
-  // TODO: 打开对应创建弹窗（CreateAppFlow / CreateWorkflow）
+  if (activeTab.value === 'apps') {
+    createAppMode.value = 'create'
+    editingApp.value = null
+    createAppModalVisible.value = true
+    return
+  }
+  // 工作流
+  if (activeTab.value === 'workflows') {
+    workflowModalMode.value = 'create'
+    editingWorkflow.value = null
+    createWorkflowModalVisible.value = true
+    return
+  }
   const btn = currentTabOption.value.createBtnText
   Message.success(`点击：${btn}（弹窗预留挂载）`)
 }
@@ -271,11 +406,52 @@ const onCreateClick = () => {
 // 卡片操作事件（4 类卡片 emit 映射）
 // ============================================================
 
-const handleAppAction = (action: string, item: AppCard) => {
-  Message.info(`[AI应用] ${action}：${item.name}`)
-  if (action === 'delete') {
-    appList.value = appList.value.filter((x) => x.id !== item.id)
+/** AI应用卡片操作 */
+const handleAppAction = async (action: string, item: AppCard) => {
+  if (action === 'analyze') {
+    // 进入应用编排详情页
+    router.push({
+      name: ROUTE_NAME.APP_ORCHESTRATION_DETAIL,
+      params: { id: item.id },
+    } as RouteLocationRaw)
+    return
   }
+  if (action === 'edit') {
+    // 打开编辑弹窗
+    createAppMode.value = 'edit'
+    editingApp.value = {
+      id: item.id,
+      name: item.name,
+      icon: item.icon,
+      description: item.description,
+    }
+    createAppModalVisible.value = true
+    return
+  }
+  if (action === 'copy') {
+    try {
+      const res = await copyApp(item.id)
+      Message.success(res.message || '已创建副本')
+      await fetchAppList()
+    } catch {
+      Message.error('创建副本失败，请稍后重试')
+    }
+    return
+  }
+  if (action === 'delete') {
+    try {
+      await deleteApp(item.id)
+      Message.success('删除成功')
+      await fetchAppList()
+    } catch {
+      Message.error('删除失败，请稍后重试')
+    }
+  }
+}
+
+/** AI应用创建/编辑成功后刷新列表 */
+const handleAppSaved = () => {
+  fetchAppList()
 }
 const handlePluginAction = async (action: string, item: PluginSpaceCard) => {
   Message.info(`[插件] ${action}：${item.name}`)
@@ -323,10 +499,27 @@ const handleDrawerEdit = () => {
 const handlePluginChange = () => {
   fetchTabLists()
 }
-const handleWorkflowAction = (action: string, item: WorkflowCard) => {
-  Message.info(`[工作流] ${action}：${item.name}`)
+const handleWorkflowAction = async (action: string, item: WorkflowCard) => {
+  if (action === 'edit') {
+    workflowModalMode.value = 'edit'
+    editingWorkflow.value = {
+      id: item.id,
+      name: item.name,
+      tool_call_name: item.workflowName,
+      icon: item.icon,
+      description: item.description,
+    }
+    createWorkflowModalVisible.value = true
+    return
+  }
   if (action === 'delete') {
-    workflowList.value = workflowList.value.filter((x) => x.id !== item.id)
+    try {
+      await deleteWorkflow(item.id)
+      Message.success('删除成功')
+      await fetchWorkflowList()
+    } catch {
+      Message.error('删除失败，请稍后重试')
+    }
   }
 }
 /** 知识库卡片：点击 / 设置 → 进入知识库详情 */
@@ -390,8 +583,25 @@ const handleLoadMore = async () => {
 // ============================================================
 
 onMounted(() => {
+  fetchAppList()
   fetchTabLists()
 })
+
+/**
+ * 监听路由 query.tab 变化 —— 支持从应用广场跳转回个人空间时自动刷新列表
+ * SPA 场景下 Space 组件已挂载，路由 push 不会重新触发 onMounted
+ */
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (tab && VALID_TABS.includes(tab as PersonalSpaceTab)) {
+      activeTab.value = tab as PersonalSpaceTab
+      if (tab === 'apps') fetchAppList()
+      if (tab === 'knowledge') fetchKnowledgeList()
+      if (tab === 'plugins' || tab === 'workflows') fetchTabLists()
+    }
+  },
+)
 
 </script>
 
@@ -543,10 +753,11 @@ onMounted(() => {
       </section>
 
       <!-- ============== 4. 底部加载更多指示器 ============== -->
-      <div v-if="!isContentEmpty" class="load-more" @click="handleLoadMore">
+      <!-- 当前 4 个 tab 都是全量拉取，无分页接口，暂不展示 -->
+      <!-- <div v-if="!isContentEmpty && hasMore" class="load-more" @click="handleLoadMore">
         <icon-loading :class="{ 'icon-spin': loadMoreLoading }" />
         <span>{{ loadMoreLoading ? '加载中' : '加载更多' }}</span>
-      </div>
+      </div> -->
 
       <!-- ============== 全局弹窗挂载 ============== -->
       <PluginEditorModal
@@ -561,6 +772,24 @@ onMounted(() => {
         :mode="knowledgeModalMode"
         :editing="editingDataset"
         @submit="handleKnowledgeSubmit"
+      />
+
+      <!-- AI应用创建/编辑弹窗 -->
+      <CreateAppModal
+        v-model:visible="createAppModalVisible"
+        :mode="createAppMode"
+        :app-id="editingApp?.id"
+        :initial-data="editingApp"
+        @success="handleAppSaved"
+      />
+
+      <!-- 工作流创建/编辑弹窗 -->
+      <CreateWorkflowModal
+        v-model:visible="createWorkflowModalVisible"
+        :mode="workflowModalMode"
+        :workflow-id="editingWorkflow?.id"
+        :initial-data="editingWorkflow"
+        @success="fetchWorkflowList"
       />
 
       <PluginDetailDrawer

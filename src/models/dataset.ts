@@ -119,9 +119,12 @@ export type GetDatasetQueriesResponse = BaseResponse<
   Array<{
     id: string
     query: string
+    /** 查询来源标识（hit_testing / query 等） */
     source: string
     dataset_id: string
     created_at: number
+    /** 本次查询命中的 Top1 文档名（可选，后端补字段） */
+    top_document?: string
   }>
 >
 

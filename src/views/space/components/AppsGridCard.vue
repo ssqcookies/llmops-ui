@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Dropdown, Modal, Message } from '@arco-design/web-vue'
+import { Dropdown, Modal } from '@arco-design/web-vue'
 import type { AppCard, AppCardAction } from '@/models/personalSpace'
 
 const props = defineProps<{
@@ -17,15 +17,15 @@ const handleAction = (actionKey: string | number | Record<string, any> | undefin
   if (!actionKey || typeof actionKey !== 'string') return
   const key = actionKey as AppCardAction
   if (key === 'delete') {
-    Modal.confirm({
-      title: '确认删除',
-      content: '确认删除该条数据？删除后数据不可恢复',
-      okText: '确认删除',
+    Modal.warning({
+      title: '要删除该应用吗？',
+      content: '删除后，已发布的 WebApp、开放 API 等将无法使用，且无法恢复。如需临时关闭，请使用禁用功能。',
+      hideCancel: false,
       cancelText: '取消',
+      okText: '确认',
       okButtonProps: { status: 'danger' },
       onOk: () => {
         emit('delete', props.item)
-        Message.success('删除成功')
       },
     })
     return
@@ -41,20 +41,22 @@ const ownerFirstChar = (props.item.owner.name || '?').charAt(0)
 
 <template>
   <div class="space-card">
-    <!-- 卡片头部：图标 + 名称 + 验证徽章 + 更多操作 -->
+    <!-- 卡片头部：图标 + 名称 + 来源标签 + 验证徽章 + 更多操作 -->
     <div class="card-head">
       <img :src="item.icon" alt="app-icon" class="card-icon" />
       <div class="card-title-wrap">
         <div class="card-title-row">
           <span class="card-title">{{ item.name }}</span>
+          <!-- 来源标签：广场应用显示，个人创建不显示 -->
+          <span v-if="item.source === 'builtin'" class="source-tag">广场</span>
           <icon-check-circle-fill v-if="item.verified" class="verified-icon" />
         </div>
         <div class="card-model-info">{{ item.modelInfo }}</div>
       </div>
-      <Dropdown class="card-actions" @select="handleAction">
-        <a-button type="text" class="more-btn">
-          <icon-more />
-        </a-button>
+      <Dropdown class="card-actions" trigger="click" @select="handleAction">
+        <div class="more-btn" @click.stop>
+          <icon-more :size="16" />
+        </div>
         <template #content>
           <a-doption value="analyze">分析</a-doption>
           <a-doption value="edit">编辑应用</a-doption>
@@ -94,7 +96,7 @@ const ownerFirstChar = (props.item.owner.name || '?').charAt(0)
     @apply flex items-start gap-3;
   }
   .card-icon {
-    @apply w-11 h-11 rounded-[10px] object-cover shrink-0;
+    @apply w-11 h-11 rounded-[10px] object-cover shrink-0 bg-[#f7f8fa];
   }
   .card-title-wrap {
     @apply flex-1 min-w-0;
@@ -105,6 +107,11 @@ const ownerFirstChar = (props.item.owner.name || '?').charAt(0)
   .card-title {
     @apply text-[15px] font-semibold text-[#1d2129] truncate;
   }
+  /* 来源标签：广场应用 */
+  .source-tag {
+    @apply shrink-0 px-1.5 py-0 rounded-[4px] text-[11px] font-medium
+           bg-[#f2f3f5] text-[#4e5969] leading-[16px];
+  }
   .verified-icon {
     @apply text-[#00b42a] text-[14px] shrink-0;
   }
@@ -112,10 +119,13 @@ const ownerFirstChar = (props.item.owner.name || '?').charAt(0)
     @apply text-[12px] text-[#86909c] mt-1 truncate;
   }
   .card-actions {
-    @apply shrink-0 -mr-1 -mt-1;
+    @apply shrink-0;
   }
+  /* 右上角「...」按钮：灰底圆角方块，常驻显示（对齐 KnowledgeGridCard 风格） */
   .more-btn {
-    @apply h-7 w-7 flex items-center justify-center text-[#86909c] hover:text-[#1d2129];
+    @apply w-8 h-8 rounded-[6px] bg-[#f2f3f5] flex items-center justify-center
+           text-[#4e5969] cursor-pointer transition-colors
+           hover:bg-[#e5e6eb] hover:text-[#1d2129];
   }
   .card-desc {
     @apply mt-3 text-[13px] text-[#4e5969] leading-[20px] overflow-hidden;

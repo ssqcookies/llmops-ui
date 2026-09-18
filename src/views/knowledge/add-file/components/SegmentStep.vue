@@ -113,15 +113,16 @@ defineExpose({ validate })
             />
           </a-form-item>
 
-          <!-- 文本预处理规则 -->
-          <a-form-item label="文本预处理规则" class="preprocess-item">
+          <!-- 文本预处理规则（纯 div 结构，确保 checkbox 严格左对齐） -->
+          <div class="preprocess-block">
+            <div class="preprocess-label">文本预处理规则</div>
             <a-checkbox v-model="form.removeExtraSpaces" class="preprocess-checkbox">
               替换掉连续的空格、换行符和制表符
             </a-checkbox>
             <a-checkbox v-model="form.removeUrlsEmails" class="preprocess-checkbox">
               删除所有 URL 和电子邮件地址
             </a-checkbox>
-          </a-form-item>
+          </div>
         </a-form>
       </template>
     </div>
@@ -185,11 +186,18 @@ defineExpose({ validate })
   .chunk-input :deep(.arco-input-number) {
     @apply w-full;
   }
-  .preprocess-item :deep(.arco-form-item-content) {
-    @apply flex flex-col items-start gap-2;
+  /* 文本预处理规则 —— 纯 div 结构，确保 checkbox 严格左对齐 */
+  .preprocess-block {
+    @apply flex flex-col gap-2;
+  }
+  .preprocess-label {
+    @apply text-[14px] text-[#1d2129] leading-6;
   }
   .preprocess-checkbox {
-    @apply text-[14px] text-[#4e5969];
+    @apply text-[14px] text-[#4e5969] !pl-0;
+  }
+  .preprocess-checkbox :deep(.arco-checkbox) {
+    @apply !pl-0;
   }
 }
 </style>

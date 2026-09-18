@@ -45,6 +45,8 @@ interface BaseCard {
 export interface AppCard extends BaseCard {
   /** 模型提供商 + 模型规格（例：月之暗面 · Moonshot (128K)） */
   modelInfo: string
+  /** 应用来源：builtin = 应用广场添加，custom = 个人创建（后端未返回时默认为 custom） */
+  source?: 'builtin' | 'custom'
 }
 
 /** AI应用卡片操作菜单枚举 */
@@ -67,6 +69,8 @@ export interface WorkflowCard extends BaseCard {
   workflowName: string
   /** 节点数量 */
   nodeCount: number
+  /** 状态：draft / published */
+  status: 'draft' | 'published'
 }
 
 /** 工作流卡片操作菜单枚举 */
