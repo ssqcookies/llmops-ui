@@ -1,5 +1,7 @@
 <script setup lang="ts">import { ref, computed, markRaw } from 'vue';
+import { useRouter } from 'vue-router';
 import { Message } from '@arco-design/web-vue';
+import { ROUTE_NAME } from '@/constants';
 import type { CollapseGroup, ChatMessageItem, PluginItem, PluginCategory } from './types';
 import { useDialogs } from './useDialogs';
 import { getIcon } from './icons';
@@ -16,11 +18,11 @@ import PluginSettingsDrawer from './components/PluginSettingsDrawer.vue';
 import AssociateWorkflowDrawer from './components/AssociateWorkflowDrawer.vue';
 import SelectKnowledgeDrawer from './components/SelectKnowledgeDrawer.vue';
 const { state, openModelSettings, closeModelSettings, openLongTermMemory, closeLongTermMemory, openRetrieval, closeRetrieval, openVoice, closeVoice, openContentReview, closeContentReview, openCancelPublish, closeCancelPublish, openAddPlugin, closeAddPlugin, openPluginSettings, closePluginSettings, openAssociateWorkflow, closeAssociateWorkflow, openSelectKnowledge, closeSelectKnowledge } = useDialogs();
+const router = useRouter();
 const activeTab = ref('edit');
 const loading = ref(false);
 const isSaving = ref(false);
 const savedTime = ref('23:18:15');
-const modelSelectVisible = ref(false);
 const personaPrompt = ref(`# 角色
 你是一个智能聊天机器人，能够与用户进行各种话题的交流，包括但不限于生活、工作、学习、娱乐等。
 
@@ -208,12 +210,16 @@ const handleCancelPublishConfirm = () => {
  closeCancelPublish();
  Message.success('已取消发布');
 };
-const handleModelSelect = (model: string) => {
- state.modelConfig.model = model;
- modelSelectVisible.value = false;
-};
 const handlePublish = () => {
  Message.success('发布成功');
+};
+/** 返回个人空间（AI 应用 Tab）；直接输入 URL 进入无历史记录时兜底显式跳转 */
+const handleBack = () => {
+  if (window.history.state?.back) {
+    router.back();
+  } else {
+    router.push({ name: ROUTE_NAME.PERSONAL_SPACE, query: { tab: 'apps' } });
+  }
 };
 const handleRefresh = () => {
  isSaving.value = true;
@@ -282,7 +288,7 @@ const longTermMemoryOptions = [
     <!-- 顶部导航操作栏 -->
     <header class="top-bar">
       <div class="flex items-center gap-4">
-        <a-button type="text" size="large" shape="circle" @click="$router.back()">
+        <a-button type="text" size="large" shape="circle" @click="handleBack">
           <template #icon><icon-arrow-left :size="18" /></template>
         </a-button>
         <div class="flex items-center gap-2">
@@ -300,36 +306,6 @@ const longTermMemoryOptions = [
       </a-tabs>
 
       <div class="flex items-center gap-2">
-        <a-popover
-          v-model:popup-visible="modelSelectVisible"
-          trigger="click"
-          :content-style="{ padding: '4px', minWidth: '160px' }"
-        >
-          <div class="model-select-trigger">
-            <span class="text-sm text-gray-800">{{ state.modelConfig.model }}</span>
-            <icon-down :size="12" class="text-gray-400" />
-          </div>
-          <template #content>
-            <div class="flex flex-col">
-              <a-option
-                v-for="opt in ['GPT-4o', 'GPT-4o Mini', 'GPT-4 Turbo']"
-                :key="opt"
-                class="model-option"
-                :class="{ 'bg-blue-50': state.modelConfig.model === opt }"
-                @click="handleModelSelect(opt)"
-              >
-                {{ opt }}
-              </a-option>
-              <a-divider class="my-1" />
-              <a-option class="model-option" @click="openModelSettings(); modelSelectVisible = false">
-                <span class="flex items-center gap-1.5 text-blue-600">
-                  <icon-settings :size="14" />
-                  模型参数配置
-                </span>
-              </a-option>
-            </div>
-          </template>
-        </a-popover>
         <a-tooltip content="刷新">
           <a-button type="text" size="large" shape="circle" @click="handleRefresh">
             <template #icon><icon-refresh :size="18" /></template>

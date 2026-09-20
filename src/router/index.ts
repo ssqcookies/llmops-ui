@@ -62,18 +62,18 @@ const routes: RouteRecordRaw[] = [
         name: ROUTE_NAME.KNOWLEDGE_DOCUMENT_DETAIL,
         component: () => import('@/views/knowledge/document/index.vue'),
       },
-      // 应用编排详情
-      {
-        path: 'app-orchestration/:id',
-        name: ROUTE_NAME.APP_ORCHESTRATION_DETAIL,
-        component: () => import('@/views/app-orchestration/detail/index.vue'),
-      },
     ],
   },
   {
     path: '/',
     component: BlankLayout,
     children: [
+      // 应用编排详情（独立全屏页面，不显示左侧侧边栏）
+      {
+        path: 'app-orchestration/:id',
+        name: ROUTE_NAME.APP_ORCHESTRATION_DETAIL,
+        component: () => import('@/views/app-orchestration/detail/index.vue'),
+      },
       {
         path: 'auth/login',
         name: ROUTE_NAME.LOGIN,
