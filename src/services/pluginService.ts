@@ -309,7 +309,7 @@ const MOCK_API_TOOLS: ApiToolProviderData[] = [
 ]
 
 /** 默认的发布者信息（个人空间模块中创建者/所有者） */
-const DEFAULT_PUBLISHER = { name: '慕小课', avatar: '' }
+const DEFAULT_PUBLISHER = { name: '罐头', avatar: '' }
 
 // ============================================================
 // 三、数据归一化：Builtin / Custom API → 统一 PluginCard

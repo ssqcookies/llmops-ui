@@ -20,7 +20,7 @@ const nonStreamResp = `{
   "data": {
     "conversation_id": "conv-xxxx-xxxx",
     "message_id": "msg-xxxx-xxxx",
-    "answer": "你好！我是慕课LLMOps智能助手……",
+    "answer": "你好！我是LLMOps智能助手……",
     "answer_tokens": 128,
     "response_latency": 1200
   }
@@ -41,7 +41,7 @@ const streamResp = `event: message
 data: {"delta": "你好"}
 
 event: message
-data: {"delta": "！我是慕课"}
+data: {"delta": "！我是"}
 
 event: message
 data: {"delta": "LLMOps智能助手"}

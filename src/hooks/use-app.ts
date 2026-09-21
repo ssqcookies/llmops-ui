@@ -115,8 +115,8 @@ export const useCreateApp = () => {
       const resp = await createApp(req)
       Message.success('新增Agent应用成功')
       await router.push({
-        name: 'space-apps-detail',
-        params: { app_id: resp.data.id },
+        name: 'AppOrchestrationDetail',
+        params: { id: resp.data.id },
       })
     } finally {
       loading.value = false
@@ -158,7 +158,7 @@ export const useCopyApp = () => {
 
       // 2.2 成功修改则进行提示并跳转页面
       Message.success('创建应用副本成功')
-      await router.push({ name: 'space-apps-detail', params: { app_id: resp.data.id } })
+      await router.push({ name: 'AppOrchestrationDetail', params: { id: resp.data.id } })
     } finally {
       loading.value = false
     }

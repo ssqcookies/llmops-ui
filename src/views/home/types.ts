@@ -22,10 +22,15 @@ export interface HomeWelcomeConfig {
 
 /** 聊天消息条目（首页自用，避免跨模块引用） */
 export interface ChatMessageItem {
+  /** 唯一 ID */
   id: string
   role: 'user' | 'assistant'
   content: string
   tokens?: number
   latency?: number
   recommendations?: string[]
+  /** 问答对 ID：user/assistant 共享同一个 pairId，用于删除整条对话 */
+  pairId?: string
+  /** 消息状态（仅 assistant 有） */
+  status?: 'completed' | 'paused' | 'stopped'
 }

@@ -53,9 +53,9 @@ const formatLatency = (ms?: number) => {
 </script>
 
 <template>
-  <div class="flex flex-col h-full w-full bg-white">
+  <div class="flex flex-col h-full w-full bg-[#f7f8fa]">
     <!-- 消息区域 -->
-    <div class="flex-1 min-h-0 overflow-y-auto px-4 py-4 scrollbar-thin">
+    <div class="flex-1 min-h-0 overflow-y-auto px-4 py-4 scrollbar-thin bg-[#f7f8fa]">
       <!-- 空状态 -->
       <div
         v-if="messageList.length === 0"
@@ -200,52 +200,61 @@ const formatLatency = (ms?: number) => {
     </div>
 
     <!-- 底部输入区域 -->
-    <div class="flex-shrink-0 border-t border-gray-100 px-4 py-3 bg-white">
-      <!-- 输入框 -->
+    <div class="flex-shrink-0 bg-[#f7f8fa] px-4 pt-4 pb-5">
       <div class="flex items-center gap-2">
+        <!-- 左侧：清空对话（框外图标按钮） -->
         <a-tooltip content="清空对话">
           <a-button
             type="text"
             size="large"
             shape="circle"
-            class="flex-shrink-0"
+            class="flex-shrink-0 !bg-transparent"
             @click="emit('deleteMessage', null)"
           >
-            <template #icon><icon-empty :size="18" /></template>
+            <template #icon>
+              <icon-message :size="22" class="text-[#4e5969]" />
+            </template>
           </a-button>
         </a-tooltip>
 
-        <div class="flex-1 flex items-center gap-2 border border-gray-200 rounded-xl px-3 py-1.5 focus-within:border-blue-500 transition-colors">
+        <!-- 胶囊输入框（任意变体穿透 Arco 内部 wrapper，去掉自带灰底/边框/focus 阴影） -->
+        <div
+          class="chat-pill flex-1 h-12 flex items-center gap-2 bg-white border border-[#e5e6eb] rounded-full pl-5 pr-2
+            [&_.arco-input-wrapper]:!bg-transparent [&_.arco-input-wrapper]:!border-none
+            [&_.arco-input-wrapper]:!shadow-none [&_.arco-input-wrapper]:!px-0
+            [&_.arco-input-wrapper.arco-input-focus]:!shadow-none
+            [&_.arco-input]:!h-10 [&_.arco-input]:!text-[14px]
+            [&_.arco-input::placeholder]:!text-[#86909c]"
+        >
           <a-input
             v-model="inputValue"
-            placeholder="输入消息..."
-            class="flex-1 !border-none !bg-transparent shadow-none"
+            placeholder="发送消息或创建 AI 应用..."
+            class="flex-1 !border-none !bg-transparent"
             @press-enter="handleKeydown"
-            allow-clear
           />
-          <a-tooltip content="添加附件">
-            <a-button type="text" size="small" shape="circle">
-              <template #icon><icon-attachment :size="16" /></template>
-            </a-button>
-          </a-tooltip>
-          <a-tooltip content="发送">
-            <a-button
-              type="primary"
-              size="small"
-              shape="circle"
-              class="flex-shrink-0"
-              :disabled="!inputValue.trim()"
-              @click="handleSend"
-            >
-              <template #icon><icon-send :size="16" /></template>
-            </a-button>
-          </a-tooltip>
+          <!-- 发送（框内右侧：纯图标无底色，空内容灰色禁用，有内容蓝色） -->
+          <a-button
+            type="text"
+            shape="circle"
+            class="flex-shrink-0 !bg-transparent !border-none
+              [&.arco-btn:hover]:!bg-transparent [&.arco-btn:active]:!bg-transparent
+              [&.arco-btn-disabled]:!bg-transparent [&.arco-btn-disabled]:!opacity-60"
+            :disabled="!inputValue.trim()"
+            @click="handleSend"
+          >
+            <template #icon>
+              <icon-send
+                :size="20"
+                :class="inputValue.trim() ? 'text-[#3370ff]' : 'text-[#86909c]'"
+              />
+            </template>
+          </a-button>
         </div>
       </div>
 
       <!-- 底部提示文字 -->
-      <div class="text-center text-gray-400 text-xs mt-3">
-        内容由 AI 生成，无法确保真实准确，仅供参考
+      <div class="text-center text-[#86909c] text-[13px] mt-3">
+        内容由AI生成，无法确保真实准确，仅供参考。
       </div>
     </div>
   </div>

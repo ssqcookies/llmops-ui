@@ -289,52 +289,50 @@ watch(
       <div
         class="w-[42%] min-w-[440px] flex flex-col gap-4 p-5 border-r border-[#f2f3f5]"
       >
-        <!-- 源文本卡片 -->
-        <div class="flex flex-col bg-white rounded-[8px] border border-[#e5e6eb] p-4">
-          <!-- 卡片头 -->
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-[15px] font-semibold text-[#1d2129]">源文本</span>
-            <a-button type="outline" size="mini" class="strategy-btn">
-              <template #icon><icon-thunderbolt /></template>
-              向量检索
-            </a-button>
-          </div>
-
-          <!-- 文本输入区 -->
-          <div class="flex-1">
-            <a-textarea
+        <!-- 胶囊形输入区 -->
+        <div class="flex flex-col gap-2">
+          <!-- 胶囊输入框（对齐原型图：白底+消息icon+发送按钮） -->
+          <div
+            class="flex items-center gap-2 bg-white border border-[#e5e6eb] rounded-full pl-4 pr-3 h-12"
+          >
+            <!-- 左侧消息图标 -->
+            <icon-message class="text-[#86909c] shrink-0" :size="18" />
+            <!-- 输入框 -->
+            <a-input
               v-model="queryInput"
               :max-length="MAX_QUERY_LEN"
-              :auto-size="{ minRows: 8, maxRows: 10 }"
-              placeholder="请输入文本，建议使用简短的陈述句"
-              class="source-textarea"
+              placeholder="发送消息或创建 AI 应用..."
+              class="source-input flex-1"
+              @press-enter="handleHit"
             />
+            <!-- 发送按钮（框内右侧：蓝色实心圆形） -->
+            <a-button
+              type="primary"
+              shape="circle"
+              size="small"
+              class="shrink-0"
+              :loading="hitLoading"
+              :disabled="queryLen === 0"
+              @click="handleHit"
+            >
+              <template #icon><icon-send /></template>
+            </a-button>
           </div>
-
-          <!-- 底部：字数 + 测试按钮 + 设置 -->
-          <div class="flex items-center justify-between mt-3">
-            <span class="text-[12px] text-[#86909c]">{{ queryLen }}/{{ MAX_QUERY_LEN }}</span>
-            <div class="flex items-center gap-1">
-              <!-- 检索设置 -->
-              <a-button
-                type="text"
-                size="mini"
-                class="setting-btn"
-                @click="settingVisible = true"
-              >
-                <template #icon><icon-settings /></template>
-              </a-button>
-              <!-- 测试按钮 -->
-              <a-button
-                type="primary"
-                size="small"
-                class="rounded-[6px] h-[28px] px-4"
-                :loading="hitLoading"
-                :disabled="queryLen === 0"
-                @click="handleHit"
-              >
-                测试
-              </a-button>
+          <!-- 底部提示文字 + 设置 -->
+          <div class="flex items-center justify-between px-3">
+            <span class="text-[12px] text-[#86909c]">内容由AI生成，无法确保真实准确，仅供参考。</span>
+            <div class="flex items-center gap-2">
+              <span class="text-[12px] text-[#c9cdd4]">{{ queryLen }}/{{ MAX_QUERY_LEN }}</span>
+              <a-tooltip content="检索设置">
+                <a-button
+                  type="text"
+                  size="mini"
+                  class="setting-btn !px-1"
+                  @click="settingVisible = true"
+                >
+                  <template #icon><icon-settings /></template>
+                </a-button>
+              </a-tooltip>
             </div>
           </div>
         </div>
@@ -448,35 +446,33 @@ watch(
   border-radius: 8px;
   overflow: hidden;
 }
-.strategy-btn :deep(.arco-btn) {
-  border-radius: 12px;
-  height: 24px;
-  padding: 0 8px;
-  font-size: 11px;
+/* ===== 胶囊输入框 —— 彻底清除 Arco Input 自带灰色底/边框/focus 阴影 ===== */
+.source-input :deep(.arco-input-wrapper) {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
 }
-.source-textarea :deep(.arco-textarea-wrapper) {
-  border-radius: 6px;
-  background: #f7f8fa;
-  border-color: transparent;
-  transition: border-color 0.2s;
+.source-input :deep(.arco-input-wrapper:hover) {
+  border: none !important;
+  box-shadow: none !important;
 }
-.source-textarea :deep(.arco-textarea-wrapper:hover) {
-  border-color: transparent;
+.source-input :deep(.arco-input-wrapper.arco-input-focus) {
+  border: none !important;
+  box-shadow: none !important;
 }
-.source-textarea :deep(.arco-textarea-wrapper:focus-within) {
-  border-color: #165dff;
-}
-.source-textarea :deep(.arco-textarea) {
-  background: transparent;
-  font-size: 13px;
-  line-height: 20px;
+.source-input :deep(.arco-input) {
+  background: transparent !important;
+  font-size: 14px;
+  height: 40px;
 }
 .setting-btn :deep(.arco-btn) {
   padding: 0 4px;
-  height: 28px;
-  color: #86909c;
+  height: 24px;
+  color: #c9cdd4;
 }
 .setting-btn :deep(.arco-btn:hover) {
   color: #165dff;
+  background: transparent;
 }
 </style>

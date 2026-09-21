@@ -58,8 +58,8 @@ export const useAddBuiltinAppToSpace = () => {
       const resp = await addBuiltinAppToSpace(builtin_app_id)
       Message.success('将Agent模板添加到工作区成功')
       await router.push({
-        name: 'space-apps-detail',
-        params: { app_id: resp.data.id },
+        name: 'AppOrchestrationDetail',
+        params: { id: resp.data.id },
       })
     } finally {
       loading.value = false

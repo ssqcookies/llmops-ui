@@ -116,45 +116,40 @@ function createDialogState(): DialogState {
 export function useDialogs() {
   const state = createDialogState()
 
-  /** 打开模型设置弹窗 */
+  /** 打开模型设置弹窗（保留 state.modelConfig 当前值，不重置） */
   const openModelSettings = () => {
-    state.modelConfig = { ...defaultModelConfig }
     state.modelSettingsVisible = true
   }
   const closeModelSettings = () => {
     state.modelSettingsVisible = false
   }
 
-  /** 打开/关闭长期记忆弹窗 */
+  /** 打开/关闭长期记忆弹窗（保留当前值） */
   const openLongTermMemory = () => {
-    state.longTermMemory = { ...state.longTermMemory }
     state.longTermMemoryVisible = true
   }
   const closeLongTermMemory = () => {
     state.longTermMemoryVisible = false
   }
 
-  /** 打开/关闭检索设置弹窗 */
+  /** 打开/关闭检索设置弹窗（保留当前值） */
   const openRetrieval = () => {
-    state.retrievalConfig = { ...defaultRetrievalConfig }
     state.retrievalVisible = true
   }
   const closeRetrieval = () => {
     state.retrievalVisible = false
   }
 
-  /** 打开/关闭语音输出弹窗 */
+  /** 打开/关闭语音输出弹窗（保留当前值） */
   const openVoice = () => {
-    state.voiceConfig = { ...defaultVoiceConfig }
     state.voiceVisible = true
   }
   const closeVoice = () => {
     state.voiceVisible = false
   }
 
-  /** 打开/关闭内容审查弹窗 */
+  /** 打开/关闭内容审查弹窗（保留当前值） */
   const openContentReview = () => {
-    state.contentReviewConfig = { ...defaultContentReviewConfig }
     state.contentReviewVisible = true
   }
   const closeContentReview = () => {

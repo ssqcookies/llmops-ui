@@ -1,28 +1,104 @@
-<script setup lang="ts">import { ref, computed, markRaw } from 'vue';
-import { useRouter } from 'vue-router';
-import { Message } from '@arco-design/web-vue';
-import { ROUTE_NAME } from '@/constants';
-import type { CollapseGroup, ChatMessageItem, PluginItem, PluginCategory } from './types';
-import { useDialogs } from './useDialogs';
-import { getIcon } from './icons';
-import ConfigCollapse from './components/ConfigCollapse.vue';
-import ChatDialog from './components/ChatDialog.vue';
-import ModelSettingsModal from './components/ModelSettingsModal.vue';
-import LongTermMemoryModal from './components/LongTermMemoryModal.vue';
-import RetrievalConfigModal from './components/RetrievalConfigModal.vue';
-import VoiceOutputModal from './components/VoiceOutputModal.vue';
-import ContentReviewModal from './components/ContentReviewModal.vue';
-import CancelPublishModal from './components/CancelPublishModal.vue';
-import AddPluginDrawer from './components/AddPluginDrawer.vue';
-import PluginSettingsDrawer from './components/PluginSettingsDrawer.vue';
-import AssociateWorkflowDrawer from './components/AssociateWorkflowDrawer.vue';
-import SelectKnowledgeDrawer from './components/SelectKnowledgeDrawer.vue';
-const { state, openModelSettings, closeModelSettings, openLongTermMemory, closeLongTermMemory, openRetrieval, closeRetrieval, openVoice, closeVoice, openContentReview, closeContentReview, openCancelPublish, closeCancelPublish, openAddPlugin, closeAddPlugin, openPluginSettings, closePluginSettings, openAssociateWorkflow, closeAssociateWorkflow, openSelectKnowledge, closeSelectKnowledge } = useDialogs();
-const router = useRouter();
-const activeTab = ref('edit');
-const loading = ref(false);
-const isSaving = ref(false);
-const savedTime = ref('23:18:15');
+<script setup lang="ts">
+import { ref, computed, markRaw, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { Message } from '@arco-design/web-vue'
+import { ROUTE_NAME } from '@/constants'
+import { getApp, getDraftAppConfig } from '@/services/app'
+import { formatTime } from '@/utils/format'
+import type { CollapseGroup, ChatMessageItem, PluginItem, PluginCategory } from './types'
+import { useDialogs } from './useDialogs'
+import { getIcon } from './icons'
+import ConfigCollapse from './components/ConfigCollapse.vue'
+import ChatDialog from './components/ChatDialog.vue'
+import ModelSettingsModal from './components/ModelSettingsModal.vue'
+import LongTermMemoryModal from './components/LongTermMemoryModal.vue'
+import RetrievalConfigModal from './components/RetrievalConfigModal.vue'
+import VoiceOutputModal from './components/VoiceOutputModal.vue'
+import ContentReviewModal from './components/ContentReviewModal.vue'
+import CancelPublishModal from './components/CancelPublishModal.vue'
+import AddPluginDrawer from './components/AddPluginDrawer.vue'
+import PluginSettingsDrawer from './components/PluginSettingsDrawer.vue'
+import AssociateWorkflowDrawer from './components/AssociateWorkflowDrawer.vue'
+import SelectKnowledgeDrawer from './components/SelectKnowledgeDrawer.vue'
+import StatisticsPanel from './components/StatisticsPanel.vue'
+
+const { state, openModelSettings, closeModelSettings, openLongTermMemory, closeLongTermMemory, openRetrieval, closeRetrieval, openVoice, closeVoice, openContentReview, closeContentReview, openCancelPublish, closeCancelPublish, openAddPlugin, closeAddPlugin, openPluginSettings, closePluginSettings, openAssociateWorkflow, closeAssociateWorkflow, openSelectKnowledge, closeSelectKnowledge } = useDialogs()
+const router = useRouter()
+const route = useRoute()
+const activeTab = ref('edit')
+const loading = ref(false)
+const isSaving = ref(false)
+
+/** 应用基础信息（从 GET /apps/:id 加载） */
+const appId = computed(() => route.params.id as string)
+const appName = ref('聊天机器人')
+const savedTime = ref('--:--:--')
+
+/** 根据后端秒级时间戳更新保存时间 */
+const updateSavedTime = (timestamp: number) => {
+  // 后端返回秒级；new Date 需要毫秒
+  savedTime.value = formatTime(timestamp * 1000, 'HH:mm:ss')
+}
+
+/** 加载应用详情 + 草稿配置 */
+const loadAppData = async () => {
+  if (!appId.value) return
+  try {
+    const [appResp, draftResp] = await Promise.all([
+      getApp(appId.value),
+      getDraftAppConfig(appId.value),
+    ])
+
+    // 1.更新应用名 + 保存时间
+    appName.value = appResp.data.name || '聊天机器人'
+    if (appResp.data.draft_updated_at) {
+      updateSavedTime(appResp.data.draft_updated_at)
+    }
+
+    // 2.同步模型配置（草稿配置里的 model_config → state.modelConfig）
+    const modelCfg = draftResp.data.model_config
+    if (modelCfg) {
+      state.modelConfig.model = modelCfg.model || state.modelConfig.model
+      state.modelConfig.temperature = modelCfg.parameters?.temperature ?? state.modelConfig.temperature
+      state.modelConfig.topP = modelCfg.parameters?.top_p ?? state.modelConfig.topP
+      state.modelConfig.maxReplyLength = modelCfg.parameters?.max_tokens ?? state.modelConfig.maxReplyLength
+    }
+
+    // 3.同步开场白等其他草稿字段
+    if (draftResp.data.preset_prompt) {
+      personaPrompt.value = draftResp.data.preset_prompt
+    }
+    if (draftResp.data.opening_statement) {
+      openingText.value = draftResp.data.opening_statement
+    }
+    if (draftResp.data.opening_questions?.length) {
+      openingQuestions.value = draftResp.data.opening_questions
+    }
+    if (draftResp.data.speech_to_text?.enable !== undefined) {
+      voiceInputEnabled.value = draftResp.data.speech_to_text.enable ? '开启' : '关闭'
+    }
+    if (draftResp.data.text_to_speech?.enable !== undefined) {
+      voiceOutputEnabled.value = draftResp.data.text_to_speech.enable
+    }
+    if (draftResp.data.long_term_memory?.enable !== undefined) {
+      longTermMemoryEnabled.value = draftResp.data.long_term_memory.enable
+      state.longTermMemory.enabled = draftResp.data.long_term_memory.enable
+    }
+    if (draftResp.data.suggested_after_answer?.enable !== undefined) {
+      showUserSuggestions.value = draftResp.data.suggested_after_answer.enable ? '开启' : '关闭'
+    }
+    if (draftResp.data.review_config) {
+      state.contentReviewConfig.reviewInput = draftResp.data.review_config.inputs_config?.enable ?? false
+      state.contentReviewConfig.reviewOutput = draftResp.data.review_config.outputs_config?.enable ?? false
+    }
+    // TODO: 同步 tools → activePlugins、datasets → activeKnowledges、workflows → activeWorkflows
+  } catch {
+    // 请求层已统一提示错误
+  }
+}
+
+onMounted(loadAppData)
+watch(appId, loadAppData)
 const personaPrompt = ref(`# 角色
 你是一个智能聊天机器人，能够与用户进行各种话题的交流，包括但不限于生活、工作、学习、娱乐等。
 
@@ -222,12 +298,14 @@ const handleBack = () => {
   }
 };
 const handleRefresh = () => {
- isSaving.value = true;
- setTimeout(() => {
- isSaving.value = false;
- Message.success('已刷新');
- }, 800);
-};
+  isSaving.value = true
+  setTimeout(() => {
+    isSaving.value = false
+    // 刷新时重新拉取 app 数据，更新 savedTime 等
+    loadAppData()
+    Message.success('已刷新')
+  }, 800)
+}
 const handleSendMessage = (query: string) => {
  const userMsg: ChatMessageItem = {
  id: `user-${Date.now()}`,
@@ -292,7 +370,7 @@ const longTermMemoryOptions = [
           <template #icon><icon-arrow-left :size="18" /></template>
         </a-button>
         <div class="flex items-center gap-2">
-          <span class="text-base font-medium text-gray-800">聊天机器人</span>
+          <span class="text-base font-medium text-gray-800">{{ appName }}</span>
           <a-tag color="arcoblue" :bordered="false" size="small">个人空间</a-tag>
           <div class="flex items-center gap-1.5 text-xs text-gray-400">
             <icon-cloud :size="12" />
@@ -319,6 +397,7 @@ const longTermMemoryOptions = [
     </header>
 
     <!-- 下方左右两大主栏 -->
+    <template v-if="activeTab === 'edit'">
     <div class="main-content">
       <!-- 左侧主栏：应用编排 -->
       <div class="left-panel">
@@ -563,6 +642,10 @@ const longTermMemoryOptions = [
         </div>
       </div>
     </div>
+    </template>
+
+    <!-- 统计分析面板 -->
+    <StatisticsPanel v-if="activeTab === 'analytics'" class="flex-1 min-h-0 overflow-hidden" />
 
     <!-- 模型设置弹窗 -->
     <ModelSettingsModal

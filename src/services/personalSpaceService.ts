@@ -4,7 +4,7 @@ import type { ApiToolItem, ApiHeaderItem, ApiToolProviderData } from '@/models/a
 import * as apiToolService from '@/services/api-tool'
 
 /** 默认所有者信息（个人空间展示用） */
-const DEFAULT_OWNER = { name: '慕小课', avatar: '' }
+const DEFAULT_OWNER = { name: '罐头', avatar: '' }
 
 /** 2.5 分页列表中的 provider 结构（不含 openapi_schema） */
 type ApiToolProviderListItem = {

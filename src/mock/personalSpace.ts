@@ -14,7 +14,7 @@ const IMG = (prompt: string): string =>
   `https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=${encodeURIComponent(prompt)}&image_size=square`
 
 /** Mock 默认所有者 */
-const DEFAULT_OWNER = { name: '慕小课', avatar: '' }
+const DEFAULT_OWNER = { name: '罐头', avatar: '' }
 
 /** Tab 1：AI应用 Mock 列表 */
 export const MOCK_APPS: AppCard[] = [
@@ -49,7 +49,7 @@ export const MOCK_APPS: AppCard[] = [
     id: 'a5', icon: IMG('software engineering prompt terminal code'), name: '提示工程猫',
     verified: false, modelInfo: 'OpenAI · gpt-3-turbo-16k',
     description:
-      '零门槛搭建bot！最懂慕课LLMOps的工程猫！输入你的创意，自动生成好用的提示词，并提供各类功能建议。',
+      '零门槛搭建bot！最懂LLMOps的工程猫！输入你的创意，自动生成好用的提示词，并提供各类功能建议。',
     owner: DEFAULT_OWNER, lastEditTime: '05-03 11:21',
   },
   {
@@ -133,7 +133,7 @@ export const MOCK_WORKFLOWS: WorkflowCard[] = [
     id: 'w5', icon: IMG('software engineering prompt terminal code'), name: '提示工程猫',
     verified: false, workflowName: 'WorkflowName', nodeCount: 15,
     description:
-      '零门槛搭建bot！最懂慕课LLMOps的工程猫！输入你的创意，自动生成好用的提示词，并提供各类功能建议。',
+      '零门槛搭建bot！最懂LLMOps的工程猫！输入你的创意，自动生成好用的提示词，并提供各类功能建议。',
     owner: DEFAULT_OWNER, lastEditTime: '05-03 11:21',
   },
   {

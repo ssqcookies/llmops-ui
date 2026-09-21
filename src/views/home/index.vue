@@ -1,20 +1,38 @@
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted } from 'vue'
+import { Message } from '@arco-design/web-vue'
 import type { QuickQuestion, HomeWelcomeConfig, ChatMessageItem } from './types'
+import {
+  useAssistantAgentChat,
+  useStopAssistantAgentChat,
+  useGetAssistantAgentMessagesWithPage,
+  useDeleteAssistantAgentConversation,
+} from '@/hooks/use-assistant-agent'
+
+// ============================================================
+// 辅助Agent hooks（真实接口联调）
+// ============================================================
+const { handleAssistantAgentChat } = useAssistantAgentChat()
+const { handleStopAssistantAgentChat } = useStopAssistantAgentChat()
+const {
+  messages: historyMessages,
+  loadAssistantAgentMessages,
+} = useGetAssistantAgentMessagesWithPage()
+const { handleDeleteAssistantAgentConversation } = useDeleteAssistantAgentConversation()
 
 // ============================================================
 // 首页欢迎配置（从 types + 常量实例化）
 // ============================================================
 
 const welcomeConfig = reactive<HomeWelcomeConfig>({
-  title: 'Hi，我是慕课 AI 应用构建器',
+  title: 'Hi，我是AI 应用构建器',
   subtitle: '你的专属 AI 原生应用 开发平台',
   description:
-    '说出你的创意，我可以快速帮你创建专属应用，一键轻松分享给朋友，也可以一键发布到慕课 LLM Ops 平台、微信等多个渠道。',
+    '说出你的创意，我可以快速帮你创建专属应用，一键轻松分享给朋友，也可以一键发布到 LLM Ops 平台、微信等多个渠道。',
   quickQuestions: [
     {
-      text: '什么是慕课LLMOps?',
-      sendText: '请详细介绍一下什么是慕课 LLMOps 平台，它有哪些核心能力？',
+      text: '什么是LLMOps?',
+      sendText: '请详细介绍一下什么是 LLMOps 平台，它有哪些核心能力？',
     },
     {
       text: '我想创建一个应用',
@@ -33,6 +51,12 @@ const welcomeConfig = reactive<HomeWelcomeConfig>({
 
 const messageList = ref<ChatMessageItem[]>([])
 const aiLoading = ref(false)
+/** 流式回答是否已输出内容（区分"思考中"与"生成中"两种加载态） */
+const hasStreamContent = ref(false)
+/** 用户点击停止后的暂停态（保留气泡并显示"已暂停"） */
+const isPaused = ref(false)
+/** 当前流式任务ID（SSE事件携带），用于停止响应 */
+const currentTaskId = ref('')
 const inputValue = ref('')
 const messageScrollRef = ref<HTMLElement | null>(null)
 
@@ -49,55 +73,183 @@ const scrollToBottom = async () => {
   }
 }
 
+/** 把 SSE 事件名统一为小写枚举名。后端是 QueueEvent 实例，f-string 会输出 "QueueEvent.AGENT_END" */
+const normalizeSSEEvent = (raw: string) => {
+  const PREFIX = 'QueueEvent.'
+  const name = raw.startsWith(PREFIX) ? raw.slice(PREFIX.length) : raw
+  return name.toLowerCase()
+}
+
 // ============================================================
 // 发送消息 / 快捷问题 / 停止响应 / 清空对话
 // ============================================================
 
+const doSend = (query: string) => {
+  // 0.防止并发发送
+  if (aiLoading.value) return
+
+  // 1.为本次问答生成 pairId（user + assistant 共享，便于整条删除）
+  const pairId = 'pair-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6)
+
+  // 2.追加用户消息
+  messageList.value.push({
+    id: 'user-' + Date.now(),
+    role: 'user',
+    content: query,
+    pairId,
+  })
+  aiLoading.value = true
+  isPaused.value = false
+  hasStreamContent.value = false
+  scrollToBottom()
+
+  // 3.本次请求的局部状态（避免多请求串流）
+  let localMsgId = ''
+  let localDone = false
+  /** 用户是否手动点击了"停止响应" */
+  let localIsManualStop = false
+
+  // 4.确保流式AI消息存在并返回该消息
+  const ensureStreamingMsg = (): ChatMessageItem | null => {
+    if (localDone) return null
+    if (!localMsgId) {
+      const aiMsg: ChatMessageItem = {
+        id: 'ai-' + Date.now(),
+        role: 'assistant',
+        content: '',
+        pairId,
+      }
+      messageList.value.push(aiMsg)
+      localMsgId = aiMsg.id
+      scrollToBottom()
+    }
+    return messageList.value.find((m) => m.id === localMsgId) ?? null
+  }
+
+  /** 标记手动停止（供顶层 handleStopResponse 调用） */
+  const markManualStop = () => { localIsManualStop = true }
+
+  // 5.结束本次流式会话
+  const finishStreaming = () => {
+    if (localDone) return
+    localDone = true
+    // 给 assistant 消息标记状态：手动停止 → stopped，否则 → completed
+    const aiMsg = localMsgId ? messageList.value.find((m) => m.id === localMsgId) : null
+    if (aiMsg) aiMsg.status = localIsManualStop ? 'stopped' : 'completed'
+    aiLoading.value = false
+    isPaused.value = false
+    currentTaskId.value = ''
+    scrollToBottom()
+  }
+
+  // 6.SSE事件处理器
+  const onSSEEvent = (event_response: Record<string, any>) => {
+    if (localDone) return
+    const { event: rawEvent, data } = event_response
+    if (data?.task_id) currentTaskId.value = data.task_id
+    const event = normalizeSSEEvent(rawEvent)
+
+    switch (event) {
+      case 'agent_message': {
+        const aiMsg = ensureStreamingMsg()
+        if (aiMsg && data.answer) {
+          aiMsg.content += data.answer
+          if (data.total_token_count) aiMsg.tokens = data.total_token_count
+          if (data.latency) aiMsg.latency = Math.round(data.latency * 1000)
+          hasStreamContent.value = true
+        }
+        scrollToBottom()
+        break
+      }
+      case 'agent_end':
+      case 'stop':
+        finishStreaming()
+        break
+      case 'error':
+      case 'timeout': {
+        const aiMsg = ensureStreamingMsg()
+        if (aiMsg && !aiMsg.content) {
+          aiMsg.content = data.thought || data.answer || '服务出现错误，请稍后重试'
+        }
+        finishStreaming()
+        break
+      }
+      // ping / agent_thought / agent_action / dataset_retrieval / long_term_memory_recall 暂不处理
+    }
+  }
+
+  // 7.发起真实SSE对话请求
+  handleAssistantAgentChat(query, onSSEEvent).catch(() => finishStreaming())
+
+  // 8.把手动停止标记函数暴露给顶层（闭包内调用 doSend 返回时）
+  return { markManualStop }
+}
+
+/** 当前活跃请求的手动停止标记器 */
+let activeMarkManualStop: (() => void) | null = null
+
 const handleSend = () => {
   const text = inputValue.value.trim()
   if (!text) return
-  doSend(text)
+  const controller = doSend(text)
+  activeMarkManualStop = controller?.markManualStop ?? null
   inputValue.value = ''
 }
 
 const handleQuickQuestion = (q: QuickQuestion) => {
   const text = q.sendText ?? q.text
-  doSend(text)
+  const controller = doSend(text)
+  activeMarkManualStop = controller?.markManualStop ?? null
 }
 
-const doSend = (query: string) => {
-  const userMsg: ChatMessageItem = {
-    id: 'user-' + Date.now(),
-    role: 'user',
-    content: query,
+const handleClearChat = async () => {
+  try {
+    await handleDeleteAssistantAgentConversation()
+    messageList.value = []
+  } catch {
+    // 请求层已统一提示错误
   }
-  messageList.value.push(userMsg)
-  aiLoading.value = true
-  scrollToBottom()
-
-  // TODO: 预留接口调用位置 - 发送对话请求
-  setTimeout(() => {
-    const aiMsg: ChatMessageItem = {
-      id: 'ai-' + Date.now(),
-      role: 'assistant',
-      content:
-        '已收到您的问题，AI 正在基于最新模型能力为您生成答案……\n\n（此处为占位回复，接入后端对话接口后将返回真实 AI 输出）',
-      tokens: 128,
-      latency: 680,
-      recommendations: ['继续深入讲解', '给我一个实际案例', '总结以上内容'],
-    }
-    messageList.value.push(aiMsg)
-    aiLoading.value = false
-    scrollToBottom()
-  }, 1200)
-}
-
-const handleClearChat = () => {
-  messageList.value = []
 }
 
 const handleStopResponse = () => {
-  aiLoading.value = false
+  if (!aiLoading.value) return
+  // 1.通知当前活跃请求：这是一次手动停止（finishStreaming 据此把状态标为 stopped）
+  activeMarkManualStop?.()
+  // 2.发后端停止请求
+  if (currentTaskId.value) handleStopAssistantAgentChat(currentTaskId.value)
+  // 3.立即切到暂停气泡；2s 兜底强制收尾（防止后端断连接不发事件）
+  isPaused.value = true
+  setTimeout(() => {
+    if (aiLoading.value) {
+      aiLoading.value = false
+      isPaused.value = false
+      currentTaskId.value = ''
+    }
+  }, 2000)
+}
+
+const handleCopy = async (content: string) => {
+  try {
+    await navigator.clipboard.writeText(content)
+    Message.success('已复制到剪贴板')
+  } catch {
+    Message.error('复制失败')
+  }
+}
+
+const handleDeletePair = (pairId?: string) => {
+  if (!pairId) return
+  messageList.value = messageList.value.filter((m) => m.pairId !== pairId)
+}
+
+/** 重试：找到 assistant 消息对应的 user 消息内容，重新发送 */
+const handleRetry = (msg: ChatMessageItem) => {
+  if (msg.role !== 'assistant' || !msg.pairId) return
+  const userMsg = messageList.value.find(
+    (m) => m.role === 'user' && m.pairId === msg.pairId,
+  )
+  if (!userMsg?.content) return
+  doSend(userMsg.content)
 }
 
 const handleRecommendationClick = (rec: string) => {
@@ -109,6 +261,40 @@ const formatLatency = (ms?: number) => {
   if (!ms) return ''
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }
+
+// ============================================================
+// 初始化：加载与辅助Agent的历史会话记录
+// ============================================================
+
+onMounted(async () => {
+  try {
+    await loadAssistantAgentMessages(true)
+    // 后端按 created_at 倒序返回 [最新...最旧]，先 slice().reverse() 变正序
+    // 再 forEach 按 user→assistant 顺序 push，最后无需再 reverse
+    const items: ChatMessageItem[] = []
+    historyMessages.value.slice().reverse().forEach((item) => {
+      const pairId = `pair-${item.id}`
+      items.push({
+        id: `${item.id}-q`,
+        role: 'user',
+        content: item.query,
+        pairId,
+      })
+      items.push({
+        id: `${item.id}-a`,
+        role: 'assistant',
+        content: item.answer,
+        tokens: item.total_token_count || undefined,
+        latency: item.latency ? Math.round(item.latency * 1000) : undefined,
+        pairId,
+        status: 'completed',
+      })
+    })
+    messageList.value = items
+  } catch {
+    // 请求层已统一提示错误
+  }
+})
 </script>
 
 <template>
@@ -164,14 +350,14 @@ const formatLatency = (ms?: number) => {
                 fontWeight: 600,
               }"
             >
-              慕
+              客
             </a-avatar>
             <div class="flex flex-col max-w-[700px]">
-              <span class="welcome-msg-name mb-1">慕小课</span>
+              <span class="welcome-msg-name mb-1">罐头</span>
               <div class="welcome-msg-bubble">
-                <p class="welcome-msg-greeting">你好，欢迎来到慕课LLMOps✨</p>
+                <p class="welcome-msg-greeting">你好，欢迎来到LLMOps✨</p>
                 <p class="welcome-msg-para">
-                  慕课LLMOps是新一代大模型 AI 应用开发平台。无论你是否有编程基础，都可以快速搭建出各种 AI 应用，并一键发布到各大社交平台，或者轻松部署到自己的网站。
+                  LLMOps是新一代大模型 AI 应用开发平台。无论你是否有编程基础，都可以快速搭建出各种 AI 应用，并一键发布到各大社交平台，或者轻松部署到自己的网站。
                 </p>
                 <div class="welcome-msg-list">
                   <p>· 随时来 <span class="font-semibold text-[#1d2129]">应用广场</span> 逛逛，这里内置了许多超有趣的应用。</p>
@@ -179,7 +365,7 @@ const formatLatency = (ms?: number) => {
                   <p>· 你也可以向我提课有关课程的问题，我可以快速替你解答。</p>
                 </div>
                 <p class="welcome-msg-para">
-                  如果你还有其他慕课LLMOps使用问题，也欢迎随时问我！
+                  如果你还有其他LLMOps使用问题，也欢迎随时问我！
                 </p>
               </div>
             </div>
@@ -225,7 +411,7 @@ const formatLatency = (ms?: number) => {
               class="shrink-0 mt-0.5"
               :style="{ backgroundColor: '#165dff', fontSize: '12px', fontWeight: 600 }"
             >
-              {{ msg.role === 'user' ? '我' : '慕' }}
+              {{ msg.role === 'user' ? '我' : '罐' }}
             </a-avatar>
 
             <!-- 内容列 -->
@@ -234,7 +420,7 @@ const formatLatency = (ms?: number) => {
               :class="msg.role === 'user' ? 'items-end' : 'items-start'"
             >
               <span class="chat-msg-label">
-                {{ msg.role === 'user' ? '我' : '慕小课' }}
+                {{ msg.role === 'user' ? '我' : '罐头' }}
               </span>
 
               <div
@@ -245,13 +431,71 @@ const formatLatency = (ms?: number) => {
               </div>
 
               <div class="flex items-center gap-2 chat-msg-meta">
-                <span v-if="msg.tokens !== undefined" class="flex items-center gap-0.5">
-                  <icon-code :size="11" />
-                  {{ msg.tokens }} tokens
-                </span>
+                <!-- 状态标签（仅 assistant 消息 + 有 status 时显示） -->
+                <template v-if="msg.role === 'assistant' && msg.status">
+                  <span
+                    class="flex items-center gap-0.5"
+                    :class="{
+                      'text-[#00b42a]': msg.status === 'completed',
+                      'text-[#f77234]': msg.status === 'stopped',
+                      'text-[#86909c]': msg.status === 'paused',
+                    }"
+                  >
+                    <icon-check-circle-fill :size="11" v-if="msg.status === 'completed'" />
+                    <icon-close-circle-fill :size="11" v-else-if="msg.status === 'stopped'" />
+                    <icon-pause :size="11" v-else />
+                    {{ msg.status === 'completed' ? '已完成' : msg.status === 'stopped' ? '手动终止' : '已暂停' }}
+                  </span>
+                </template>
+
+                <!-- 耗时 + tokens -->
                 <span v-if="msg.latency !== undefined" class="flex items-center gap-0.5">
                   <icon-clock-circle :size="11" />
                   {{ formatLatency(msg.latency) }}
+                </span>
+                <span v-if="msg.tokens !== undefined" class="flex items-center gap-0.5">
+                  <icon-code :size="11" />
+                  {{ msg.tokens }} Tokens
+                </span>
+
+                <!-- hover 显示：重试 + 复制 + 删除（仅 assistant 消息 + 有 status 时） -->
+                <span
+                  v-if="msg.role === 'assistant' && msg.status"
+                  class="ml-auto opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5"
+                >
+                  <a-tooltip content="重试">
+                    <a-button
+                      type="text"
+                      size="mini"
+                      shape="circle"
+                      class="!w-5 !h-5 hover:!bg-[#f2f3f5]"
+                      @click="handleRetry(msg)"
+                    >
+                      <template #icon><icon-refresh :size="12" /></template>
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip content="复制">
+                    <a-button
+                      type="text"
+                      size="mini"
+                      shape="circle"
+                      class="!w-5 !h-5 hover:!bg-[#f2f3f5]"
+                      @click="handleCopy(msg.content)"
+                    >
+                      <template #icon><icon-copy :size="12" /></template>
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip content="删除当前对话">
+                    <a-button
+                      type="text"
+                      size="mini"
+                      shape="circle"
+                      class="!w-5 !h-5 hover:!bg-[#f2f3f5]"
+                      @click="handleDeletePair(msg.pairId)"
+                    >
+                      <template #icon><icon-delete :size="12" /></template>
+                    </a-button>
+                  </a-tooltip>
                 </span>
               </div>
 
@@ -273,17 +517,17 @@ const formatLatency = (ms?: number) => {
             </div>
           </div>
 
-          <!-- AI loading -->
-          <div v-if="aiLoading" class="flex gap-2.5">
+          <!-- AI 思考中（未输出内容 + 未暂停） -->
+          <div v-if="aiLoading && !hasStreamContent && !isPaused" class="flex gap-2.5">
             <a-avatar
               :size="28"
               class="shrink-0 mt-0.5"
               :style="{ backgroundColor: '#165dff', fontSize: '12px', fontWeight: 600 }"
             >
-              慕
+              罐
             </a-avatar>
             <div class="flex flex-col gap-1">
-              <span class="chat-msg-label">慕小课</span>
+              <span class="chat-msg-label">罐头</span>
               <div class="chat-msg-bubble chat-msg-bubble-ai py-2.5">
                 <a-spin :size="14" />
               </div>
@@ -297,6 +541,32 @@ const formatLatency = (ms?: number) => {
                 停止响应
               </a-button>
             </div>
+          </div>
+
+          <!-- 已暂停（用户点击停止后，保留气泡 + 文案） -->
+          <div v-if="aiLoading && isPaused" class="flex gap-2.5">
+            <a-avatar
+              :size="28"
+              class="shrink-0 mt-0.5"
+              :style="{ backgroundColor: '#165dff', fontSize: '12px', fontWeight: 600 }"
+            >
+              罐
+            </a-avatar>
+            <div class="flex flex-col gap-1">
+              <span class="chat-msg-label">罐头</span>
+              <div class="chat-msg-bubble chat-msg-bubble-ai py-2.5 text-[#86909c] text-[12px] flex items-center gap-1">
+                <icon-pause :size="12" />
+                已暂停
+              </div>
+            </div>
+          </div>
+
+          <!-- 流式生成中（已输出内容 + 未暂停）：停止响应按钮 -->
+          <div v-if="aiLoading && hasStreamContent && !isPaused" class="flex justify-center mt-2">
+            <a-button size="mini" type="outline" @click="handleStopResponse">
+              <template #icon><icon-close :size="11" /></template>
+              停止响应
+            </a-button>
           </div>
 
           <!-- 清空对话 -->
@@ -319,44 +589,28 @@ const formatLatency = (ms?: number) => {
     <div class="shrink-0 pb-5 pt-2 relative z-[1]">
       <div class="max-w-[760px] mx-auto">
         <div class="input-container">
-          <a-tooltip content="添加附件">
-            <a-button
-              type="text"
-              shape="circle"
-              size="small"
-              class="shrink-0"
-              :style="{ width: '34px', height: '34px', color: '#86909c', margin: '0 2px' }"
-            >
-              <template #icon><icon-paperclip :size="16" /></template>
-            </a-button>
-          </a-tooltip>
+          <!-- 左侧：消息图标（原型图） -->
+          <icon-message class="shrink-0 text-[#86909c] ml-3" :size="20" />
 
-          <a-input
+          <!-- 原生 input，彻底消灭 Arco wrapper 灰底 -->
+          <input
             v-model="inputValue"
+            type="text"
             placeholder="发送消息或创建 AI 应用..."
-            class="chat-input-field"
-            :bordered="false"
-            size="large"
-            allow-clear
-            @press-enter="handleSend"
+            class="flex-1 bg-transparent border-none outline-none text-[14px] text-[#1d2129] placeholder:text-[#c9cdd4] px-2"
+            @keydown.enter="handleSend"
           />
 
+          <!-- 右侧：发送按钮（蓝色圆形） -->
           <a-button
             type="primary"
             shape="circle"
             size="small"
             :disabled="!inputValue.trim()"
-            :style="{
-              width: '30px',
-              height: '30px',
-              minWidth: '30px',
-              flexShrink: 0,
-              margin: '0 4px',
-              borderRadius: '50%',
-            }"
+            class="shrink-0 mr-1"
             @click="handleSend"
           >
-            <template #icon><icon-right :size="14" /></template>
+            <template #icon><icon-send :size="14" /></template>
           </a-button>
         </div>
 
@@ -446,29 +700,9 @@ const formatLatency = (ms?: number) => {
 @layer components {
   .input-container {
     @apply flex items-center bg-white rounded-full border border-[#e5e6eb]
-           px-2 py-1.5 gap-1 transition-colors;
+           gap-1;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
-  }
-  .input-container:focus-within {
-    border-color: #165dff;
-    box-shadow: 0 2px 10px rgba(22, 93, 255, 0.08);
-  }
-  .chat-input-field :deep(.arco-input-wrapper) {
-    background-color: transparent !important;
-    box-shadow: none !important;
-    padding-left: 4px !important;
-    padding-right: 4px !important;
-  }
-  .chat-input-field :deep(.arco-input-inner) {
-    background-color: transparent !important;
-    font-size: 13px !important;
-    color: #1d2129;
-  }
-  .chat-input-field :deep(.arco-input-inner::placeholder) {
-    color: #c9cdd4;
-  }
-  .chat-input-field :deep(.arco-input-clear-btn) {
-    color: #c9cdd4;
+    padding: 8px 4px 8px 4px;
   }
 }
 </style>

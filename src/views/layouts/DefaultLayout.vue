@@ -279,7 +279,7 @@ const handleAccountSaved = () => {
                   />
                 </template>
                 <template v-else>
-                  {{ currentUser.name ? currentUser.name.charAt(0) : '慕' }}
+                  {{ currentUser.name ? currentUser.name.charAt(0) : '罐' }}
                 </template>
               </a-avatar>
               <div class="flex flex-col min-w-0 ml-2 flex-1">

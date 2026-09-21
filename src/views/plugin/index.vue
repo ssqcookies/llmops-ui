@@ -275,7 +275,7 @@ onMounted(async () => {
               <div class="flex items-center gap-2">
                 <div class="publisher-avatar">
                   <a-avatar :size="14" class="avatar-inner">
-                    {{ card.publisher.name ? card.publisher.name.charAt(0) : '慕' }}
+                    {{ card.publisher.name ? card.publisher.name.charAt(0) : '罐' }}
                   </a-avatar>
                 </div>
                 <span class="publisher-name">{{ card.publisher.name }}</span>
