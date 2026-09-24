@@ -62,24 +62,22 @@ export const useStopWebAppChat = () => {
 export const useGetAppConversations = () => {
   // 1.定义hooks所需数据
   const loading = ref(false)
+  const all_conversations = ref<Record<string, any>[]>([])
   const pinned_conversations = ref<Record<string, any>[]>([])
   const unpinned_conversations = ref<Record<string, any>[]>([])
 
-  // 2.定义加载数据处理器
+  // 2.定义加载数据处理器（单次调用，前端按 is_pinned 分组）
   const loadWebAppConversations = async (token: string) => {
     try {
       loading.value = true
-      const [pinned_resp, unpinned_resp] = await Promise.all([
-        getWebAppConversations(token, true),
-        getWebAppConversations(token, false),
-      ])
-
-      pinned_conversations.value = pinned_resp.data
-      unpinned_conversations.value = unpinned_resp.data
+      const resp = await getWebAppConversations(token)
+      all_conversations.value = resp.data
+      pinned_conversations.value = resp.data.filter((c: any) => c.is_pinned)
+      unpinned_conversations.value = resp.data.filter((c: any) => !c.is_pinned)
     } finally {
       loading.value = false
     }
   }
 
-  return { loading, pinned_conversations, unpinned_conversations, loadWebAppConversations }
+  return { loading, all_conversations, pinned_conversations, unpinned_conversations, loadWebAppConversations }
 }

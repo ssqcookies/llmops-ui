@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 应用广场：浏览内置应用模板，加入工作区（引用关系，已加入不可重复） */
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import BuiltinAppCard from './components/BuiltinAppCard.vue'
 import {
@@ -12,31 +12,6 @@ import type {
   GetBuiltinAppCategoriesResponse,
   GetBuiltinAppsResponse,
 } from '@/models/builtin-app'
-
-/** localStorage key —— 持久化已加入工作区的内置应用 id */
-const STORAGE_KEY = 'builtin_app_added_ids'
-
-/** 从 localStorage 读取已加入 id 集合 */
-const loadAddedIds = (): Set<string> => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return new Set()
-    const parsed = JSON.parse(raw) as unknown
-    if (Array.isArray(parsed)) return new Set(parsed.filter((x) => typeof x === 'string'))
-    return new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-/** 写入 localStorage */
-const saveAddedIds = (set: Set<string>) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...set]))
-  } catch {
-    // 忽略 localStorage 写入错误（隐私模式等）
-  }
-}
 
 /** 内置应用分类项 */
 type CategoryItem = GetBuiltinAppCategoriesResponse['data'][number]
@@ -54,17 +29,8 @@ const appList = ref<BuiltinAppItem[]>([])
 /** 加载状态 */
 const loading = ref(false)
 
-/** 已加入工作区的内置应用 id 集合 —— 从 localStorage 恢复，持久化跨页面/跨刷新 */
-const addedIds = reactive<Set<string>>(loadAddedIds())
-
 /** 加入中（防重复点击） */
 const addingId = ref<string>('')
-
-/** 监听 addedIds 变化，自动持久化到 localStorage */
-watch(
-  () => addedIds.size,
-  () => saveAddedIds(addedIds),
-)
 
 /** 分类标签列表（首项为「全部」） */
 const categoryTabs = computed(() => [
@@ -89,11 +55,8 @@ const filteredApps = computed<BuiltinAppItem[]>(() => {
   return list
 })
 
-/** 判断某个内置应用是否已加入工作区：后端返回优先，fallback 到前端本地 Set */
-const isAdded = (item: BuiltinAppItem): boolean => {
-  if (item.added !== undefined) return item.added
-  return addedIds.has(item.id)
-}
+/** 判断某个内置应用是否已加入工作区：以接口返回的 is_added 为准 */
+const isAdded = (item: BuiltinAppItem): boolean => item.is_added
 
 /** 空状态类型 */
 const emptyType = computed<'none' | 'empty' | 'no-result'>(() => {
@@ -112,20 +75,12 @@ const fetchCategories = async () => {
   }
 }
 
-/** 拉取内置应用列表 */
+/** 拉取内置应用列表（is_added 由后端返回，直接使用） */
 const fetchApps = async () => {
   loading.value = true
   try {
     const res = await getBuiltinApps()
-    // 合并状态：后端返回的 added 字段 + 前端 localStorage 已记录的 id
-    appList.value = res.data.map((a) => ({
-      ...a,
-      added: a.added ?? addedIds.has(a.id),
-    }))
-    // 后端返回 added=true 的也要同步到 localStorage（防止之前漏记）
-    res.data.forEach((a) => {
-      if (a.added) addedIds.add(a.id)
-    })
+    appList.value = res.data
   } catch {
     appList.value = []
   } finally {
@@ -155,10 +110,9 @@ const handleAddToSpace = async (item: BuiltinAppItem) => {
   addingId.value = item.id
   try {
     const res = await addBuiltinAppToSpace(item.id)
-    addedIds.add(item.id)
-    // 同步更新列表里的 added 状态
+    // 本地同步：按钮立即切换为「已加入」
     const target = appList.value.find((a) => a.id === item.id)
-    if (target) target.added = true
+    if (target) target.is_added = true
     Message.success(res.message || '已加入工作区')
   } catch {
     // 错误已由 request 层统一提示（后端如果返回"已加入"错误也会被拦截）

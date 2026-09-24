@@ -15,6 +15,7 @@ export const APP_META = {
 export const ROUTE_NAME = {
   HOME: 'Home',
   NOT_FOUND: 'NotFound',
+  FORBIDDEN: 'Forbidden',
   SPACEAPPSLIST:'SpaceAppsList',
   LOGIN:'login',
   APP_ORCHESTRATION_DETAIL: 'AppOrchestrationDetail',
@@ -25,6 +26,7 @@ export const ROUTE_NAME = {
   KNOWLEDGE_ADD_FILE: 'KnowledgeAddFile',
   OPEN_API: 'OpenApi',
   APP_SQUARE: 'AppSquare',
+  WEB_APP: 'WebApp',
 } as const
 
 /** 默认分页参数 */

@@ -105,14 +105,17 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
               await router.replace({ path: '/auth/login' })
               return reject(new Error('登录已失效'))
             }
+            // 无访问权限（HTTP 403）：跳转 403 页面
+            if (res.status === 403) {
+              await router.replace({ path: '/403' })
+              return reject(new Error('没有访问权限'))
+            }
             const rawText = await res.text();
-            console.log("HTTP异常响应文本：", rawText);
             Message.error(`请求错误：${res.status} ${res.statusText}`);
             return reject(new Error(`HTTP ${res.status}`));
           }
 
           const raw = await res.text();
-          console.log("原始响应文本：", raw);
           if (!raw) {
             throw new Error("服务端返回空数据");
           }
@@ -124,6 +127,10 @@ const baseFetch = <T>(url: string, fetchOptions: FetchOptionType): Promise<T> =>
             clearAccount()
             await router.replace({ path: '/auth/login' })
             reject(new Error('登录已失效'))
+          } else if (json.code === httpCode.notFound) {
+            await router.push({ name: 'errors-not-found' })
+          } else if (json.code === httpCode.forbidden) {
+            await router.push({ name: 'errors-forbidden' })
           } else {
             Message.error(json.message);
             if (rejectOnBusinessError) {
@@ -282,6 +289,10 @@ export const upload = <T>(url: string, options: any = {}): Promise<T> => {
           clearAccount()
           await router.replace({ path: '/auth/login' })
           reject(new Error('登录已失效'))
+        } else if (xhr.status === 403) {
+          // 无访问权限（HTTP 403）：跳转 403 页面
+          await router.replace({ path: '/403' })
+          reject(new Error('没有访问权限'))
         } else {
           reject(xhr)
         }

@@ -4,7 +4,6 @@ import { useRoute, useRouter } from 'vue-router'
 import type { NavMenuItem, CurrentUser, LayoutDialogs } from './types'
 import { useAccountStore } from '@/stores'
 import { getCurrentUser } from '@/services/account'
-import CreateAppFlow from '@/views/components/CreateAppFlow.vue'
 import AccountSettingsModal from '@/views/components/AccountSettingsModal.vue'
 import LogoutConfirmModal from '@/views/components/LogoutConfirmModal.vue'
 import IconHome from '@/components/icons/IconHome.vue'
@@ -41,7 +40,6 @@ const currentUser = reactive<CurrentUser>({
 })
 
 const dialogs = reactive<LayoutDialogs>({
-  createApp: false,
   accountSettings: false,
   logoutConfirm: false,
 })
@@ -147,8 +145,16 @@ const handleNavClick = (key: string) => {
   router.push(item.path)
 }
 
+/**
+ * 创建 AI 应用：无论当前在哪个菜单，都跳转到个人空间第一个 Tab，
+ * 并由个人空间页打开创建应用弹窗。
+ * nonce 保证在相同 URL 下重复点击也能触发个人空间页的监听
+ */
 const openCreateApp = () => {
-  dialogs.createApp = true
+  router.push({
+    path: '/space/apps',
+    query: { create: 'app', nonce: Date.now() },
+  })
 }
 
 const openAccountSettings = () => {
@@ -324,7 +330,6 @@ const handleAccountSaved = () => {
       </main>
 
       <!-- ========= 全局弹窗挂载点位（从 views/components 引入） ========= -->
-      <CreateAppFlow v-model:visible="dialogs.createApp" />
       <AccountSettingsModal
         v-model:visible="dialogs.accountSettings"
         @saved="handleAccountSaved"

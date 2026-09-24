@@ -1,4 +1,3 @@
-
 import {
   type BasePaginatorRequest,
   type BasePaginatorResponse,
@@ -37,12 +36,16 @@ export type GetAppsWithPageResponse = BasePaginatorResponse<{
   model_config: {
     provider: string
     model: string
+    /** 模型展示名（如 Qwen2.5-7B），列表卡片展示 provider · label */
+    label?: string
+    /** 模型唯一名（如 qwen2.5-7b-instruct） */
+    name?: string
   }
   status: string
-  /** 应用来源：builtin = 应用广场添加，custom = 个人创建（后端未返回时前端默认为 custom） */
-  source?: 'builtin' | 'custom'
   updated_at: number
   created_at: number
+  /** 应用来源：builtin=来自应用广场模板，custom=用户个人创建。后端暂未返回该字段，前端默认 custom */
+  source?: 'builtin' | 'custom'
 }>
 
 // 获取特定应用的草稿配置响应结构
@@ -83,7 +86,7 @@ export type GetDraftAppConfigResponse = BaseResponse<{
 
 // 更新特定应用的草稿配置请求结构
 export type UpdateDraftAppConfigRequest = {
-  model?: { provider: string; model: string; parameters: Record<string, any> }
+  model_config?: { provider: string; model: string; parameters: Record<string, any> }
   dialog_round?: number
   preset_prompt?: string
   tools?: { type: string; provider_id: string; tool_id: string; params: Record<string, any> }[]
@@ -137,3 +140,16 @@ export type GetPublishHistoriesWithPageResponse = BasePaginatorResponse<{
 export type GetDebugConversationMessagesWithPageRequest = BasePaginatorRequest & {
   created_at?: number
 }
+
+// 获取应用发布配置响应结构
+export type GetPublishedConfigResponse = BaseResponse<{
+  web_app: {
+    token: string
+    status: string
+  }
+}>
+
+// 重新生成WebApp凭证标识响应结构
+export type RegenerateWebAppTokenResponse = BaseResponse<{
+  token: string
+}>

@@ -11,11 +11,14 @@ export type GetLanguageModelsResponse = BaseResponse<
     background: string
     support_model_types: string[]
     models: {
-      model: string
+      /** 模型唯一标识（选中值），如 deepseek-v3 */
+      name: string
+      /** 模型显示名，如 DeepSeek-V3 */
       label: string
+      model_name: string
       model_type: string
       features: string[]
-      context_windows: number
+      context_window: number
       max_output_tokens: number
       attributes: Record<string, any>
       metadata: Record<string, any>
@@ -41,11 +44,12 @@ export type GetLanguageModelsResponse = BaseResponse<
 
 // 获取指定语言模型详情响应结构
 export type GetLanguageModelResponse = BaseResponse<{
-  model: string
+  name: string
   label: string
+  model_name: string
   model_type: string
   features: string[]
-  context_windows: number
+  context_window: number
   max_output_tokens: number
   attributes: Record<string, any>
   metadata: Record<string, any>

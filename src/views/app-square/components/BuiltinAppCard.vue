@@ -8,7 +8,7 @@ type BuiltinAppItem = GetBuiltinAppsResponse['data'][number]
 const props = defineProps<{
   /** 应用数据 */
   item: BuiltinAppItem
-  /** 是否已加入个人工作区（后端返回 + 前端本地状态合并后传入） */
+  /** 是否已加入个人工作区（取自接口 is_added） */
   added: boolean
   /** 加入中（按钮 loading，防重复点击） */
   adding: boolean
@@ -24,18 +24,18 @@ const handleAdd = () => {
   emit('add', props.item)
 }
 
-/** 模型信息（厂商 · 模型），空值/占位值过滤 */
+/** 模型信息（厂商 · 模型展示名 label），label 缺失时回退 model / name，空值/占位值过滤 */
 const modelInfo = (item: BuiltinAppItem): string => {
   const cfg = item.model_config
   if (!cfg) return ''
   const provider = (cfg.provider || '').trim()
-  const model = (cfg.model || '').trim()
+  const modelLabel = (cfg.label || cfg.model || cfg.name || '').trim()
   const PLACEHOLDERS = new Set(['assistant', 'default', 'unknown', '未设置', ''])
-  const pValid = provider && !PLACEHOLDERS.has(provider.toLowerCase())
-  const mValid = model && !PLACEHOLDERS.has(model.toLowerCase())
-  if (pValid && mValid) return `${provider} · ${model}`
+  const pValid = !!provider && !PLACEHOLDERS.has(provider.toLowerCase())
+  const mValid = !!modelLabel && !PLACEHOLDERS.has(modelLabel.toLowerCase())
+  if (pValid && mValid) return `${provider} · ${modelLabel}`
   if (pValid) return provider
-  if (mValid) return model
+  if (mValid) return modelLabel
   return ''
 }
 </script>

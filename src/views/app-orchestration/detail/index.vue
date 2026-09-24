@@ -2,10 +2,29 @@
 import { ref, computed, markRaw, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import { ROUTE_NAME } from '@/constants'
-import { getApp, getDraftAppConfig } from '@/services/app'
+import {
+  getApp,
+  getDraftAppConfig,
+  debugChat,
+  stopDebugChat,
+  getDebugConversationMessagesWithPage,
+  deleteDebugConversation,
+  publish,
+  cancelPublish,
+  updateDraftAppConfig,
+} from '@/services/app'
+import type { UpdateDraftAppConfigRequest } from '@/models/app'
+import { uploadImage } from '@/services/upload-file'
+import { generateSuggestedQuestions } from '@/services/ai'
 import { formatTime } from '@/utils/format'
-import type { CollapseGroup, ChatMessageItem, PluginItem, PluginCategory } from './types'
+import type {
+  CollapseGroup,
+  ChatMessageItem,
+  ChatPendingImage,
+  ChatKnowledgeItem,
+  PluginItem,
+  PluginCategory,
+} from './types'
 import { useDialogs } from './useDialogs'
 import { getIcon } from './icons'
 import ConfigCollapse from './components/ConfigCollapse.vue'
@@ -16,11 +35,13 @@ import RetrievalConfigModal from './components/RetrievalConfigModal.vue'
 import VoiceOutputModal from './components/VoiceOutputModal.vue'
 import ContentReviewModal from './components/ContentReviewModal.vue'
 import CancelPublishModal from './components/CancelPublishModal.vue'
+import PublishHistoryDrawer from './components/PublishHistoryDrawer.vue'
 import AddPluginDrawer from './components/AddPluginDrawer.vue'
 import PluginSettingsDrawer from './components/PluginSettingsDrawer.vue'
 import AssociateWorkflowDrawer from './components/AssociateWorkflowDrawer.vue'
 import SelectKnowledgeDrawer from './components/SelectKnowledgeDrawer.vue'
 import StatisticsPanel from './components/StatisticsPanel.vue'
+import PublishConfigPanel from './components/PublishConfigPanel.vue'
 
 const { state, openModelSettings, closeModelSettings, openLongTermMemory, closeLongTermMemory, openRetrieval, closeRetrieval, openVoice, closeVoice, openContentReview, closeContentReview, openCancelPublish, closeCancelPublish, openAddPlugin, closeAddPlugin, openPluginSettings, closePluginSettings, openAssociateWorkflow, closeAssociateWorkflow, openSelectKnowledge, closeSelectKnowledge } = useDialogs()
 const router = useRouter()
@@ -32,7 +53,11 @@ const isSaving = ref(false)
 /** 应用基础信息（从 GET /apps/:id 加载） */
 const appId = computed(() => route.params.id as string)
 const appName = ref('聊天机器人')
+const appIcon = ref('')
+const appDescription = ref('')
 const savedTime = ref('--:--:--')
+/** 最近编辑完整时间戳（秒），用于发布历史抽屉展示 */
+const appLastEditedAt = ref<number | null>(null)
 
 /** 根据后端秒级时间戳更新保存时间 */
 const updateSavedTime = (timestamp: number) => {
@@ -49,18 +74,27 @@ const loadAppData = async () => {
       getDraftAppConfig(appId.value),
     ])
 
-    // 1.更新应用名 + 保存时间
+    // 1.更新应用名 + 图标 + 描述 + 保存时间
     appName.value = appResp.data.name || '聊天机器人'
+    appIcon.value = appResp.data.icon || ''
+    appDescription.value = appResp.data.description || ''
     if (appResp.data.draft_updated_at) {
       updateSavedTime(appResp.data.draft_updated_at)
+      appLastEditedAt.value = appResp.data.draft_updated_at
     }
+
+    // 1.1 加载调试会话历史消息
+    loadDebugMessages()
 
     // 2.同步模型配置（草稿配置里的 model_config → state.modelConfig）
     const modelCfg = draftResp.data.model_config
     if (modelCfg) {
+      state.modelConfig.provider = modelCfg.provider || state.modelConfig.provider
       state.modelConfig.model = modelCfg.model || state.modelConfig.model
       state.modelConfig.temperature = modelCfg.parameters?.temperature ?? state.modelConfig.temperature
       state.modelConfig.topP = modelCfg.parameters?.top_p ?? state.modelConfig.topP
+      state.modelConfig.presencePenalty = modelCfg.parameters?.presence_penalty ?? state.modelConfig.presencePenalty
+      state.modelConfig.frequencyPenalty = modelCfg.parameters?.frequency_penalty ?? state.modelConfig.frequencyPenalty
       state.modelConfig.maxReplyLength = modelCfg.parameters?.max_tokens ?? state.modelConfig.maxReplyLength
     }
 
@@ -68,24 +102,30 @@ const loadAppData = async () => {
     if (draftResp.data.preset_prompt) {
       personaPrompt.value = draftResp.data.preset_prompt
     }
-    if (draftResp.data.opening_statement) {
+    // 3.同步其他草稿字段（开场白、语音开关、审查配置等）
+    if (draftResp.data.opening_statement !== undefined) {
       openingText.value = draftResp.data.opening_statement
     }
-    if (draftResp.data.opening_questions?.length) {
-      openingQuestions.value = draftResp.data.opening_questions
+    if (draftResp.data.opening_questions) {
+      // 接口返回空数组时也要保证至少一行空输入框
+      openingQuestions.value = draftResp.data.opening_questions.length > 0
+        ? draftResp.data.opening_questions
+        : ['']
+    } else {
+      openingQuestions.value = ['']
     }
     if (draftResp.data.speech_to_text?.enable !== undefined) {
-      voiceInputEnabled.value = draftResp.data.speech_to_text.enable ? '开启' : '关闭'
+      voiceInputEnabled.value = !!draftResp.data.speech_to_text.enable
     }
     if (draftResp.data.text_to_speech?.enable !== undefined) {
-      voiceOutputEnabled.value = draftResp.data.text_to_speech.enable
+      voiceOutputEnabled.value = !!draftResp.data.text_to_speech.enable
     }
     if (draftResp.data.long_term_memory?.enable !== undefined) {
-      longTermMemoryEnabled.value = draftResp.data.long_term_memory.enable
-      state.longTermMemory.enabled = draftResp.data.long_term_memory.enable
+      longTermMemoryEnabled.value = !!draftResp.data.long_term_memory.enable
+      state.longTermMemory.enabled = longTermMemoryEnabled.value
     }
     if (draftResp.data.suggested_after_answer?.enable !== undefined) {
-      showUserSuggestions.value = draftResp.data.suggested_after_answer.enable ? '开启' : '关闭'
+      showUserSuggestions.value = !!draftResp.data.suggested_after_answer.enable
     }
     if (draftResp.data.review_config) {
       state.contentReviewConfig.reviewInput = draftResp.data.review_config.inputs_config?.enable ?? false
@@ -119,10 +159,10 @@ const personaPrompt = ref(`# 角色
 - 回答内容应积极、友善、文明，不得包含不当言论。
 - 所给出的信息必须按照指定的格式进行组织，不能偏离框架要求。
 - 对于不确定的问题，应明确告知用户并尽力提供获取答案的途径。`);
-const openingText = ref('你好，我是 ChatGPT，很高兴和你交流！');
-const openingQuestions = ref(['你能做什么？', '帮我写一段代码', '介绍一下最新的科技动态']);
-const showUserSuggestions = ref('开启');
-const voiceInputEnabled = ref('开启');
+const openingText = ref('');
+const openingQuestions = ref<string[]>(['']);
+const showUserSuggestions = ref(true);
+const voiceInputEnabled = ref(true);
 const voiceOutputEnabled = ref(false);
 const longTermMemoryEnabled = ref(false);
 const knowledgeSearchEnabled = ref(true);
@@ -144,6 +184,7 @@ const collapseGroups = computed<CollapseGroup[]>(() => [
  key: 'plugins',
  title: '扩展插件',
  description: '添加外部插件来扩展 AI 的能力',
+ icon: 'icon-puzzle',
  defaultExpand: true,
  showAdd: true,
  },
@@ -151,6 +192,7 @@ const collapseGroups = computed<CollapseGroup[]>(() => [
  key: 'workflows',
  title: '工作流组件',
  description: '工作流支持通过可视化的方式，对插件、大语言模型、代码块等功能进行组合，从而实现复杂、稳定的业务流程编排，例如旅行规划、报告分析等。',
+ icon: 'icon-share',
  defaultExpand: true,
  showAdd: true,
  },
@@ -158,6 +200,7 @@ const collapseGroups = computed<CollapseGroup[]>(() => [
  key: 'knowledge',
  title: '知识库',
  description: '引用文本类型的数据，实现知识问答，最多支持关联 5 个知识库。',
+ icon: 'icon-file',
  defaultExpand: true,
  showAdd: true,
  },
@@ -165,37 +208,49 @@ const collapseGroups = computed<CollapseGroup[]>(() => [
  key: 'longTermMemory',
  title: '长期记忆',
  description: '总结聊天对话的内容，并用于更好的响应用户的消息。',
+ icon: 'icon-book',
  defaultExpand: true,
  },
  {
  key: 'opening',
  title: '对话开场白',
  description: '设置对话开场白和推荐问题',
+ icon: 'icon-message',
  defaultExpand: true,
  },
  {
  key: 'userSuggestions',
  title: '用户问题建议',
+ description: '在应用回答后，自动根据对话内容提供 3 条用户提问建议。',
+ icon: 'icon-lightbulb',
  defaultExpand: true,
  },
  {
  key: 'retrieval',
  title: '检索设置',
+ description: '配置知识库检索策略，提升问答准确性。',
+ icon: 'icon-search',
  defaultExpand: true,
  },
  {
  key: 'voiceInput',
  title: '语音输入',
+ description: '启用后，您可以使用语音输入。',
+ icon: 'icon-microphone',
  defaultExpand: true,
  },
  {
  key: 'voiceOutput',
  title: '语音输出',
+ description: '启用后，可以使用语音输出。',
+ icon: 'icon-voice',
  defaultExpand: true,
  },
  {
  key: 'contentReview',
  title: '内容审查',
+ description: '审查输入和输出内容，保障应用安全合规。',
+ icon: 'icon-safe',
  defaultExpand: true,
  },
 ]);
@@ -235,33 +290,31 @@ const handleAddKnowledgeConfirm = (ids: string[]) => {
  activeKnowledges.value = ids;
  Message.success(`已添加 ${ids.length} 个知识库`);
 };
-const handleLongTermMemoryToggle = (value: unknown) => {
- const strValue = String(value);
- longTermMemoryEnabled.value = strValue === '开启';
- if (longTermMemoryEnabled.value) {
- state.longTermMemory.enabled = true;
- openLongTermMemory();
- }
- else {
- state.longTermMemory.enabled = false;
- }
+const handleLongTermMemoryToggle = (value: boolean) => {
+  longTermMemoryEnabled.value = value;
+  if (value) {
+    state.longTermMemory.enabled = true;
+    openLongTermMemory();
+  } else {
+    state.longTermMemory.enabled = false;
+  }
 };
-const handleVoiceOutputToggle = (value: unknown) => {
- const strValue = String(value);
- voiceOutputEnabled.value = strValue === '开启';
- if (voiceOutputEnabled.value) {
- state.voiceConfig.autoPlay = true;
- openVoice();
- }
+const handleVoiceOutputToggle = (value: boolean) => {
+  voiceOutputEnabled.value = value;
+  if (value) {
+    state.voiceConfig.autoPlay = true;
+    openVoice();
+  }
 };
-const handleContentReviewToggle = (value: unknown) => {
- const strValue = String(value);
- if (strValue === '开启') {
- state.contentReviewConfig.reviewInput = true;
- state.contentReviewConfig.reviewOutput = true;
- openContentReview();
- }
-};
+/** 内容审查合并开关：输入/输出任一开启即认为开启；整体关闭则两个都关 */
+const contentReviewEnabled = computed<boolean>(
+  () => state.contentReviewConfig.reviewInput || state.contentReviewConfig.reviewOutput,
+)
+
+const handleContentReviewToggle = (value: boolean) => {
+  state.contentReviewConfig.reviewInput = value
+  state.contentReviewConfig.reviewOutput = value
+}
 const handleRetrievalOpen = () => {
  openRetrieval();
 };
@@ -282,82 +335,495 @@ const handleVoiceConfirm = () => {
 const handleContentReviewConfirm = () => {
  closeContentReview();
 };
-const handleCancelPublishConfirm = () => {
- closeCancelPublish();
- Message.success('已取消发布');
-};
-const handlePublish = () => {
- Message.success('发布成功');
-};
+/** 发布历史抽屉显隐 */
+const historyVisible = ref(false)
+
+/** 正在发布 / 取消发布（防重复点击） */
+const publishing = ref(false)
+const cancellingPublish = ref(false)
+
+/** 更新发布：调后端接口 */
+const handlePublish = async () => {
+  if (publishing.value || !appId.value) return
+  publishing.value = true
+  try {
+    await publish(appId.value)
+    Message.success('发布成功')
+  } catch {
+    // service 已统一 Message.error
+  } finally {
+    publishing.value = false
+  }
+}
+
+/** 下拉菜单项：取消发布（先弹二次确认 Modal） */
+const handleTriggerCancelPublish = () => {
+  openCancelPublish()
+}
+
+/** 取消发布 Modal 确认回调 */
+const handleCancelPublishConfirm = async () => {
+  if (cancellingPublish.value || !appId.value) return
+  cancellingPublish.value = true
+  try {
+    await cancelPublish(appId.value)
+    Message.success('已取消发布')
+    closeCancelPublish()
+  } catch {
+    // service 已统一 Message.error
+  } finally {
+    cancellingPublish.value = false
+  }
+}
+
+/** —— 草稿保存相关 —— */
+
+/** 构建 UpdateDraftAppConfigRequest payload（camelCase → snake_case） */
+const buildDraftPayload = (): UpdateDraftAppConfigRequest => {
+  const cfg = state.modelConfig
+  const openingQs = openingQuestions.value
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .slice(0, 3) // 最多 3 条推荐问题
+
+  // 内容审查：只要任意开关开着，就整体 enable=true，并带上 keywords
+  const reviewInput = state.contentReviewConfig.reviewInput
+  const reviewOutput = state.contentReviewConfig.reviewOutput
+  const reviewEnabled = reviewInput || reviewOutput
+
+  return {
+    // 模型配置
+    model_config: {
+      provider: cfg.provider || '',
+      model: cfg.model || '',
+      parameters: {
+        temperature: cfg.temperature,
+        top_p: cfg.topP,
+        presence_penalty: cfg.presencePenalty,
+        frequency_penalty: cfg.frequencyPenalty,
+        max_tokens: cfg.maxReplyLength,
+      },
+    },
+    dialog_round: cfg.contextRounds,
+    preset_prompt: personaPrompt.value,
+
+    // 插件 tools —— 后端期望 { type, provider_id, tool_id, params }[]，
+    // 前端 PluginItem 暂未携带 provider_id，先不传，等插件抽屉接完整契约后补
+    // TODO: activePlugins → tools
+
+    workflows: activeWorkflows.value,
+    datasets: activeKnowledges.value,
+
+    retrieval_config: {
+      retrieval_strategy: state.retrievalConfig.strategy,
+      k: state.retrievalConfig.maxRecall,
+      score: state.retrievalConfig.minMatchScore,
+    },
+
+    long_term_memory: { enable: state.longTermMemory.enabled },
+
+    opening_statement: openingText.value,
+    opening_questions: openingQs,
+
+    speech_to_text: { enable: voiceInputEnabled.value },
+
+    text_to_speech: {
+      enable: voiceOutputEnabled.value,
+      voice: state.voiceConfig.voice,
+      auto_play: state.voiceConfig.autoPlay,
+    },
+
+    suggested_after_answer: { enable: showUserSuggestions.value },
+
+    review_config: {
+      enable: reviewEnabled,
+      keywords: state.contentReviewConfig.keywords,
+      inputs_config: {
+        enable: reviewInput,
+        preset_response: state.contentReviewConfig.presetReply,
+      },
+      outputs_config: { enable: reviewOutput },
+    },
+  }
+}
+
+/** 保存前必要校验 —— 失败时直接 Message.error 并返回 false */
+const validateDraft = (): boolean => {
+  if (!personaPrompt.value.trim()) {
+    Message.error('请填写人设与回复逻辑')
+    return false
+  }
+  if (!state.modelConfig.provider || !state.modelConfig.model) {
+    Message.error('请先选择模型')
+    return false
+  }
+  const keywords = state.contentReviewConfig.keywords
+  const anyReview =
+    state.contentReviewConfig.reviewInput || state.contentReviewConfig.reviewOutput
+  if (anyReview && (!keywords || keywords.length === 0)) {
+    Message.error('已开启内容审查，请至少填写一个关键词')
+    return false
+  }
+  if (activeKnowledges.value.length > 5) {
+    Message.error('最多支持关联 5 个知识库')
+    return false
+  }
+  return true
+}
+
+/** 保存草稿 */
+const handleSaveDraft = async () => {
+  if (!appId.value || isSaving.value) return
+  if (!validateDraft()) return
+  isSaving.value = true
+  try {
+    const payload = buildDraftPayload()
+    const resp = await updateDraftAppConfig(appId.value, payload)
+    // 用后端返回时间更新保存时间
+    if (resp.data && typeof (resp.data as any).updated_at === 'number') {
+      updateSavedTime((resp.data as any).updated_at)
+    } else {
+      // 兜底：用当前时间
+      updateSavedTime(Math.floor(Date.now() / 1000))
+    }
+    Message.success('草稿已保存')
+  } catch {
+    // service 已统一 Message.error
+  } finally {
+    isSaving.value = false
+  }
+}
 /** 返回个人空间（AI 应用 Tab）；直接输入 URL 进入无历史记录时兜底显式跳转 */
 const handleBack = () => {
   if (window.history.state?.back) {
     router.back();
   } else {
-    router.push({ name: ROUTE_NAME.PERSONAL_SPACE, query: { tab: 'apps' } });
+    router.push('/space/apps');
   }
 };
-const handleRefresh = () => {
-  isSaving.value = true
-  setTimeout(() => {
-    isSaving.value = false
-    // 刷新时重新拉取 app 数据，更新 savedTime 等
-    loadAppData()
-    Message.success('已刷新')
-  }, 800)
+/** 待发送图片（选择后立即上传，uploading 表示上传中） */
+const pendingImages = ref<ChatPendingImage[]>([])
+/** 当前流式任务 ID（SSE 事件携带 task_id），用于停止响应 */
+const currentDebugTaskId = ref('')
+/** 当前活跃请求的手动停止标记器 */
+let activeMarkManualStop: (() => void) | null = null
+
+/** 把 SSE 事件名统一为小写枚举名（后端 f-string 会输出 "QueueEvent.AGENT_END"） */
+const normalizeSSEEvent = (raw: string) => {
+  const PREFIX = 'QueueEvent.'
+  const name = raw.startsWith(PREFIX) ? raw.slice(PREFIX.length) : raw
+  return name.toLowerCase()
 }
-const handleSendMessage = (query: string) => {
- const userMsg: ChatMessageItem = {
- id: `user-${Date.now()}`,
- role: 'user',
- content: query,
- };
- chatMessages.value.push(userMsg);
- isChatLoading.value = true;
- setTimeout(() => {
- const botMsg: ChatMessageItem = {
- id: `bot-${Date.now()}`,
- role: 'assistant',
- content: `你好，我是${state.modelConfig.model}，很高兴和你交流！`,
- tokens: Math.floor(Math.random() * 1000) + 500,
- latency: Math.floor(Math.random() * 2000) + 500,
- recommendations: ['你好吗？', '能帮我做什么？', '介绍一下你自己'],
- };
- chatMessages.value.push(botMsg);
- isChatLoading.value = false;
- }, 1200);
-};
-const handleDeleteMessage = (message: ChatMessageItem | null) => {
- if (message === null) {
- chatMessages.value = [];
- }
- else {
- const idx = chatMessages.value.findIndex(m => m.id === message.id);
- if (idx > -1)
- chatMessages.value.splice(idx, 1);
- }
-};
+
+/** 历史消息 agent_thoughts 中的 dataset_retrieval → 知识库片段 */
+interface RawAgentThought {
+  event: string
+  thought?: string
+  observation?: string
+  tool?: string
+}
+const buildKnowledgeItems = (thoughts?: RawAgentThought[]): ChatKnowledgeItem[] => {
+  if (!thoughts?.length) return []
+  return thoughts
+    .filter((t) => t.event?.toLowerCase().includes('dataset_retrieval'))
+    .map((t) => ({
+      title: t.tool || '知识库片段',
+      content: t.thought || t.observation || '',
+    }))
+    .filter((item) => item.content)
+}
+
+/** 加载调试会话历史消息（后端按 created_at 倒序返回，逐页拉取后 reverse 成正序映射；page_size 范围 1-50） */
+const loadDebugMessages = async () => {
+  try {
+    const PAGE_SIZE = 50
+    const rawList: Awaited<ReturnType<typeof getDebugConversationMessagesWithPage>>['data']['list'] = []
+    let currentPage = 1
+    let totalPage = 1
+    do {
+      const resp = await getDebugConversationMessagesWithPage(appId.value, {
+        current_page: currentPage,
+        page_size: PAGE_SIZE,
+      })
+      rawList.push(...resp.data.list)
+      totalPage = resp.data.paginator.total_page
+      currentPage += 1
+    } while (currentPage <= totalPage)
+
+    const items: ChatMessageItem[] = []
+    rawList.slice().reverse().forEach((item) => {
+      const pairId = `pair-${item.id}`
+      items.push({
+        id: `${item.id}-q`,
+        pairId,
+        role: 'user',
+        content: item.query,
+      })
+      items.push({
+        id: `${item.id}-a`,
+        pairId,
+        role: 'assistant',
+        content: item.answer,
+        serverMessageId: item.id,
+        tokens: item.total_token_count || undefined,
+        // 后端 latency 单位为秒，前端统一转毫秒
+        latency: item.latency ? Math.round(item.latency * 1000) : undefined,
+        status: 'completed',
+        knowledgeItems: buildKnowledgeItems(item.agent_thoughts as RawAgentThought[]),
+      })
+    })
+    chatMessages.value = items
+
+    // 开启了用户问题建议时，为最后一条 AI 回复拉取建议问题
+    if (showUserSuggestions.value) {
+      const lastAssistant = [...items].reverse().find((m) => m.role === 'assistant')
+      if (lastAssistant?.serverMessageId) {
+        fetchSuggestedQuestions(lastAssistant)
+      }
+    }
+  } catch {
+    // 请求层已统一提示错误
+  }
+}
+
+/** 拉取某条 AI 回复的建议问题（受「用户问题建议」开关控制） */
+const fetchSuggestedQuestions = async (message: ChatMessageItem) => {
+  if (!showUserSuggestions.value || !message.serverMessageId) return
+  try {
+    const resp = await generateSuggestedQuestions(message.serverMessageId)
+    if (Array.isArray(resp.data) && resp.data.length) {
+      // 历史消息场景传入的可能是响应式代理之外的原始对象，统一从列表中取回代理
+      const target = chatMessages.value.find((m) => m.id === message.id) ?? message
+      target.recommendations = resp.data.slice(0, 3)
+    }
+  } catch {
+    // 建议问题拉取失败不影响主流程
+  }
+}
+
+/** 发送调试消息（SSE 流式） */
+const doSend = (query: string, imageUrls: string[]) => {
+  if (isChatLoading.value) return null
+
+  // 1.一问一答共享 pairId，追加用户消息（含图片）
+  const pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  chatMessages.value.push({
+    id: `user-${Date.now()}`,
+    pairId,
+    role: 'user',
+    content: query,
+    ...(imageUrls.length ? { images: imageUrls } : {}),
+  })
+  isChatLoading.value = true
+  currentDebugTaskId.value = ''
+
+  // 2.本次请求的局部状态，避免多请求串流
+  let localMsgId = ''
+  let localDone = false
+  /** 用户是否手动点击了“停止响应” */
+  let localIsManualStop = false
+
+  /** 确保流式 AI 消息已存在并返回 */
+  const ensureStreamingMsg = (): ChatMessageItem | null => {
+    if (localDone) return null
+    if (!localMsgId) {
+      const aiMsg: ChatMessageItem = {
+        id: `ai-${Date.now()}`,
+        pairId,
+        role: 'assistant',
+        content: '',
+      }
+      chatMessages.value.push(aiMsg)
+      localMsgId = aiMsg.id
+    }
+    return chatMessages.value.find((m) => m.id === localMsgId) ?? null
+  }
+
+  /** 结束本次流式会话，按是否手动停止标记状态 */
+  const finishStreaming = () => {
+    if (localDone) return
+    localDone = true
+    const aiMsg = localMsgId ? chatMessages.value.find((m) => m.id === localMsgId) : null
+    if (aiMsg) {
+      aiMsg.status = localIsManualStop ? 'stopped' : 'completed'
+      if (!aiMsg.knowledgeItems?.length) aiMsg.knowledgeItems = undefined
+    }
+    isChatLoading.value = false
+    currentDebugTaskId.value = ''
+  }
+
+  // 3.SSE 事件处理
+  const onSSEEvent = (eventResponse: Record<string, unknown>) => {
+    if (localDone) return
+    const { event: rawEvent, data } = eventResponse as {
+      event: string
+      data: Record<string, any>
+    }
+    if (data?.task_id) currentDebugTaskId.value = data.task_id
+    const event = normalizeSSEEvent(rawEvent)
+
+    switch (event) {
+      case 'agent_message': {
+        const aiMsg = ensureStreamingMsg()
+        if (aiMsg && data.answer) {
+          aiMsg.content += data.answer
+          if (!aiMsg.serverMessageId) aiMsg.serverMessageId = data.message_id || data.id
+          if (data.total_token_count) aiMsg.tokens = data.total_token_count
+          if (data.latency) aiMsg.latency = Math.round(data.latency * 1000)
+        }
+        break
+      }
+      case 'dataset_retrieval': {
+        // 知识库检索过程实时收集，用于“已搜索知识库”折叠面板
+        const aiMsg = ensureStreamingMsg()
+        if (aiMsg && (data.thought || data.observation)) {
+          aiMsg.knowledgeItems = [
+            ...(aiMsg.knowledgeItems ?? []),
+            { title: data.tool || '知识库片段', content: data.thought || data.observation },
+          ]
+        }
+        break
+      }
+      case 'agent_end': {
+        // 正常回复完成：收尾后按开关为这条回复拉取建议问题
+        const aiMsg = localMsgId ? chatMessages.value.find((m) => m.id === localMsgId) ?? null : null
+        finishStreaming()
+        if (aiMsg) fetchSuggestedQuestions(aiMsg)
+        break
+      }
+      case 'stop':
+        finishStreaming()
+        break
+      case 'error':
+      case 'timeout': {
+        const aiMsg = ensureStreamingMsg()
+        if (aiMsg && !aiMsg.content) {
+          aiMsg.content = data.thought || data.answer || '服务出现错误，请稍后重试'
+        }
+        finishStreaming()
+        break
+      }
+      // ping / agent_thought / agent_action / long_term_memory_recall 暂不处理
+      default:
+        break
+    }
+  }
+
+  // 4.发起调试对话 SSE 请求
+  // TODO: 后端 debugChat 支持 image_urls 字段后，将 imageUrls 随 body 一并提交
+  debugChat(appId.value, query, onSSEEvent).catch(() => finishStreaming())
+
+  return {
+    markManualStop: () => {
+      localIsManualStop = true
+    },
+  }
+}
+
+const handleSendMessage = (query: string, imageUrls: string[] = []) => {
+  if (!query.trim()) return
+  const controller = doSend(query, imageUrls)
+  activeMarkManualStop = controller?.markManualStop ?? null
+  pendingImages.value = []
+}
+
+/** 删除单组问答；message 为 null 时清空整个调试会话 */
+const handleDeleteMessage = async (message: ChatMessageItem | null) => {
+  if (message === null) {
+    try {
+      await deleteDebugConversation(appId.value)
+      chatMessages.value = []
+    } catch {
+      // 请求层已统一提示错误
+    }
+    return
+  }
+  chatMessages.value = chatMessages.value.filter((m) => m.pairId !== message.pairId)
+}
+
+/** 停止响应：标记手动停止 + 调停止接口 + 2s 兜底收尾 */
 const handleStopResponse = () => {
- isChatLoading.value = false;
-};
+  if (!isChatLoading.value) return
+  activeMarkManualStop?.()
+  if (currentDebugTaskId.value) {
+    stopDebugChat(appId.value, currentDebugTaskId.value)
+  }
+  setTimeout(() => {
+    if (isChatLoading.value) {
+      const pendingAi = [...chatMessages.value]
+        .reverse()
+        .find((m) => m.role === 'assistant' && !m.status)
+      if (pendingAi) {
+        pendingAi.status = 'stopped'
+        if (!pendingAi.knowledgeItems?.length) pendingAi.knowledgeItems = undefined
+      }
+      isChatLoading.value = false
+      currentDebugTaskId.value = ''
+    }
+  }, 2000)
+}
+
+/** 语音播放：后端 TTS 接口暂未提供 */
+const handlePlayVoice = (message: ChatMessageItem) => {
+  // TODO: 接入语音播放接口（TTS），入参为 message.serverMessageId
+  void message
+  Message.info('语音播放功能即将上线')
+}
+
+/** 选择图片：本地预览 + 立即上传，成功后替换为服务端图片地址 */
+const handleSelectImages = async (files: File[]) => {
+  for (const file of files) {
+    const localUrl = URL.createObjectURL(file)
+    pendingImages.value.push({ url: localUrl, uploading: true })
+    try {
+      const resp = await uploadImage(file)
+      const idx = pendingImages.value.findIndex((img) => img.url === localUrl)
+      if (idx > -1) {
+        URL.revokeObjectURL(localUrl)
+        pendingImages.value[idx] = { url: resp.data.image_url, uploading: false }
+      }
+    } catch {
+      pendingImages.value = pendingImages.value.filter((img) => img.url !== localUrl)
+      URL.revokeObjectURL(localUrl)
+    }
+  }
+}
+
+/** 移除待发送图片 */
+const handleRemoveImage = (url: string) => {
+  pendingImages.value = pendingImages.value.filter((img) => img.url !== url)
+  if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+}
 const handleOpeningQuestionRemove = (index: number) => {
- openingQuestions.value.splice(index, 1);
+  if (openingQuestions.value.length <= 1) {
+    // 删到只剩最后一行时不清空，重置为空字符串保留一个输入框
+    openingQuestions.value = ['']
+  } else {
+    openingQuestions.value.splice(index, 1)
+  }
+};
+const handleOpeningQuestionAdd = () => {
+  openingQuestions.value.push('')
 };
 const userSuggestionsOptions = [
- { label: '开启', value: '开启' },
- { label: '关闭', value: '关闭' },
+ { label: '开启', value: true },
+ { label: '关闭', value: false },
 ];
 const voiceInputOptions = [
- { label: '开启', value: '开启' },
- { label: '关闭', value: '关闭' },
+ { label: '开启', value: true },
+ { label: '关闭', value: false },
 ];
 const voiceOutputOptions = [
- { label: '开启', value: '开启' },
- { label: '关闭', value: '关闭' },
+ { label: '开启', value: true },
+ { label: '关闭', value: false },
 ];
 const longTermMemoryOptions = [
- { label: '开启', value: '开启' },
- { label: '关闭', value: '关闭' },
+ { label: '开启', value: true },
+ { label: '关闭', value: false },
+];
+const contentReviewOptions = [
+ { label: '开启', value: true },
+ { label: '关闭', value: false },
 ];
 </script>
 
@@ -379,20 +845,40 @@ const longTermMemoryOptions = [
         </div>
       </div>
 
-      <a-tabs v-model:active-key="activeTab" size="medium" type="line" class="flex-1 max-w-md justify-center">
+      <a-tabs v-model:active-key="activeTab" size="medium" type="text" class="flex-1 max-w-md justify-center">
         <a-tab-pane v-for="tab in tabOptions" :key="tab.key" :title="tab.title" />
       </a-tabs>
 
       <div class="flex items-center gap-2">
-        <a-tooltip content="刷新">
-          <a-button type="text" size="large" shape="circle" @click="handleRefresh">
-            <template #icon><icon-refresh :size="18" /></template>
+        <a-tooltip content="发布历史">
+          <a-button type="text" size="large" shape="circle" @click="historyVisible = true">
+            <template #icon><icon-history :size="18" /></template>
           </a-button>
         </a-tooltip>
-        <a-button type="primary" size="large" class="ml-2" @click="handlePublish">
-          <template #icon><icon-upload :size="16" /></template>
-          更新发布
-        </a-button>
+
+        <a-button type="primary" size="large" class="ml-2" :loading="isSaving" @click="handleSaveDraft">保存</a-button>
+
+        <!-- 更新发布 + 取消发布 组合按钮 -->
+        <a-button-group size="large" class="ml-0">
+          <a-button
+            type="primary"
+            :loading="publishing"
+            @click="handlePublish"
+          >
+            <template #icon><icon-cloud-upload :size="16" /></template>
+            更新发布
+          </a-button>
+          <a-dropdown>
+            <a-button type="primary">
+              <icon-down :size="14" />
+            </a-button>
+            <template #content>
+              <a-doption @click="handleTriggerCancelPublish">
+                取消发布
+              </a-doption>
+            </template>
+          </a-dropdown>
+        </a-button-group>
       </div>
     </header>
 
@@ -430,7 +916,7 @@ const longTermMemoryOptions = [
               <a-textarea
                 v-model="personaPrompt"
                 placeholder="请输入人设与回复逻辑"
-                :auto-size="{ minRows: 20, maxRows: 40 }"
+                :auto-size="{ minRows: 20 }"
                 show-word-limit
                 :max-length="20000"
               />
@@ -502,21 +988,12 @@ const longTermMemoryOptions = [
                   </div>
                 </template>
 
-                <!-- 长期记忆 -->
+                <!-- 长期记忆：头部开关，内容区空 -->
+                <template #header-right-longTermMemory>
+                  <a-select v-model="longTermMemoryEnabled" class="w-24" :options="longTermMemoryOptions" @change="handleLongTermMemoryToggle" />
+                </template>
                 <template #longTermMemory>
-                  <div class="flex items-center justify-between">
-                    <div class="text-sm text-gray-600">
-                      总结聊天对话的内容，并用于更好的响应用户的消息。
-                    </div>
-                    <a-select
-                      :model-value="longTermMemoryEnabled ? '开启' : '关闭'"
-                      class="w-24"
-                      @change="handleLongTermMemoryToggle"
-                    >
-                      <a-option value="开启">开启</a-option>
-                      <a-option value="关闭">关闭</a-option>
-                    </a-select>
-                  </div>
+                  <!-- 无额外内容，开关已在头部 -->
                 </template>
 
                 <!-- 对话开场白 -->
@@ -540,78 +1017,91 @@ const longTermMemoryOptions = [
                         >
                           <a-input v-model="openingQuestions[idx]" placeholder="输入开场白引导问题" class="flex-1" />
                           <a-button type="text" shape="circle" size="small" @click="handleOpeningQuestionRemove(idx)">
-                            <template #icon><icon-close :size="14" /></template>
+                            <template #icon><icon-minus :size="14" /></template>
                           </a-button>
                         </div>
+                        <a-button
+                          type="text"
+                          size="small"
+                          class="justify-start !text-[#165dff]"
+                          @click="handleOpeningQuestionAdd"
+                        >
+                          <template #icon><icon-plus :size="14" /></template>
+                          添加预设问题
+                        </a-button>
                       </div>
                     </div>
                   </div>
                 </template>
 
-                <!-- 用户问题建议 -->
+                <!-- 用户问题建议：头部开关，内容区显示提示语 -->
+                <template #header-right-userSuggestions>
+                  <a-select v-model="showUserSuggestions" class="w-24" :options="userSuggestionsOptions" />
+                </template>
                 <template #userSuggestions>
-                  <div class="flex items-center justify-between">
-                    <div class="text-sm text-gray-600">
-                      在应用回答后，自动根据对话内容提供 3 条用户提问建议。
+                  <div class="flex flex-col gap-2">
+                    <div class="text-xs text-[#86909c]">
+                      在应用回复后，自动根据对话内容提供 3 条用户提问建议。
                     </div>
-                    <a-select v-model="showUserSuggestions" class="w-24" :options="userSuggestionsOptions" />
                   </div>
                 </template>
 
                 <!-- 检索设置 -->
-                <template #retrieval>
-                  <div class="flex items-center justify-between">
-                    <div class="text-sm text-gray-600">
-                      引用文本类型的数据，实现知识问答，最多支持关联 5 个知识库。
-                    </div>
-                    <a-button type="text" size="small" @click="handleRetrievalOpen">
-                      <template #icon><icon-settings :size="14" /></template>
-                      设置
-                    </a-button>
-                  </div>
+                <template #header-right-retrieval>
+                  <a-button type="text" size="small" @click="handleRetrievalOpen">
+                    <template #icon><icon-settings :size="14" /></template>
+                    设置
+                  </a-button>
                 </template>
+                <template #retrieval></template>
 
-                <!-- 语音输入 -->
+                <!-- 语音输入：头部开关，内容区显示提示语 -->
+                <template #header-right-voiceInput>
+                  <a-select v-model="voiceInputEnabled" class="w-24" :options="voiceInputOptions" />
+                </template>
                 <template #voiceInput>
-                  <div class="flex items-center justify-between">
-                    <div class="text-sm text-gray-600">
-                      启用后，您可以使用语音输入。
+                  <div class="flex flex-col gap-2">
+                    <div class="text-xs text-[#86909c]">
+                      启用后，可以使用语音输入。
                     </div>
-                    <a-select v-model="voiceInputEnabled" class="w-24" :options="voiceInputOptions" />
                   </div>
                 </template>
 
-                <!-- 语音输出 -->
+                <!-- 语音输出：头部开关，内容区显示提示语 -->
+                <template #header-right-voiceOutput>
+                  <a-select v-model="voiceOutputEnabled" class="w-24" :options="voiceOutputOptions" @change="handleVoiceOutputToggle" />
+                </template>
                 <template #voiceOutput>
-                  <div class="flex items-center justify-between">
-                    <div class="text-sm text-gray-600">
-                      启用后，可以使用语音输出。
+                  <div class="flex flex-col gap-2">
+                    <div class="text-xs text-[#86909c]">
+                      在 Bot 回复后，自动根据对话内容提供 3 条用户提问建议。
                     </div>
-                    <a-select
-                      :model-value="voiceOutputEnabled ? '开启' : '关闭'"
-                      class="w-24"
-                      @change="handleVoiceOutputToggle"
-                    >
-                      <a-option value="开启">开启</a-option>
-                      <a-option value="关闭">关闭</a-option>
-                    </a-select>
                   </div>
                 </template>
 
-                <!-- 内容审查 -->
+                <!-- 内容审查：头部开关（合并两个开关），开启后内容区显示设置按钮 -->
+                <template #header-right-contentReview>
+                  <a-select
+                    :model-value="contentReviewEnabled"
+                    class="w-24"
+                    :options="contentReviewOptions"
+                    @change="(v) => handleContentReviewToggle(v)"
+                  />
+                </template>
                 <template #contentReview>
-                  <div class="flex items-center justify-between">
-                    <div class="text-sm text-gray-600">
+                  <div class="flex flex-col gap-3">
+                    <div class="text-xs text-[#86909c]">
                       审查输入和输出内容，保障应用安全合规。
                     </div>
-                    <a-select
-                      :model-value="state.contentReviewConfig.reviewInput ? '开启' : '关闭'"
-                      class="w-24"
-                      @change="handleContentReviewToggle"
+                    <button
+                      v-if="contentReviewEnabled"
+                      type="button"
+                      class="w-full h-9 rounded-[6px] bg-[#f2f3f5] hover:bg-[#e5e6eb] text-sm text-[#4e5969] flex items-center justify-center gap-1.5 transition-colors"
+                      @click="openContentReview"
                     >
-                      <a-option value="开启">开启</a-option>
-                      <a-option value="关闭">关闭</a-option>
-                    </a-select>
+                      <icon-settings :size="14" />
+                      设置
+                    </button>
                   </div>
                 </template>
               </ConfigCollapse>
@@ -635,14 +1125,25 @@ const longTermMemoryOptions = [
           <ChatDialog
             :message-list="chatMessages"
             :is-loading="isChatLoading"
+            :app-name="appName"
+            :app-icon="appIcon"
+            :voice-input-enabled="voiceInputEnabled"
+            :voice-output-enabled="voiceOutputEnabled"
+            :pending-images="pendingImages"
             @send="handleSendMessage"
             @delete-message="handleDeleteMessage"
             @stop-response="handleStopResponse"
+            @select-images="handleSelectImages"
+            @remove-image="handleRemoveImage"
+            @play-voice="handlePlayVoice"
           />
         </div>
       </div>
     </div>
     </template>
+
+    <!-- 发布配置面板 -->
+    <PublishConfigPanel v-if="activeTab === 'publish'" class="flex-1 min-h-0 overflow-hidden" />
 
     <!-- 统计分析面板 -->
     <StatisticsPanel v-if="activeTab === 'analytics'" class="flex-1 min-h-0 overflow-hidden" />
@@ -690,6 +1191,7 @@ const longTermMemoryOptions = [
     <!-- 取消发布确认弹窗 -->
     <CancelPublishModal
       :visible="state.cancelPublishVisible"
+      :loading="cancellingPublish"
       @confirm="handleCancelPublishConfirm"
       @cancel="closeCancelPublish"
     />
@@ -725,6 +1227,17 @@ const longTermMemoryOptions = [
       :selected-ids="activeKnowledges"
       @update:visible="(val) => state.selectKnowledgeVisible = val"
       @confirm="handleAddKnowledgeConfirm"
+    />
+
+    <!-- 发布历史抽屉 -->
+    <PublishHistoryDrawer
+      v-model:visible="historyVisible"
+      :app-id="appId"
+      :app-name="appName"
+      :app-icon="appIcon"
+      :app-description="appDescription"
+      :app-last-edited-at="appLastEditedAt"
+      @rollback="loadAppData"
     />
   </div>
 </template>

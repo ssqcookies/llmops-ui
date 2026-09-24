@@ -1,6 +1,8 @@
 <script setup lang="ts">
 defineProps<{
   visible: boolean
+  /** 确认按钮 loading 态（接口调用中） */
+  loading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -37,7 +39,15 @@ const handleCancel = () => {
 
       <div class="flex justify-end gap-3 pt-2 border-t border-gray-100">
         <a-button @click="handleCancel">取消</a-button>
-        <a-button type="primary" status="danger" @click="handleConfirm">确认</a-button>
+        <a-button
+          type="primary"
+          status="danger"
+          :loading="loading"
+          :disabled="loading"
+          @click="handleConfirm"
+        >
+          确认
+        </a-button>
       </div>
     </div>
   </a-modal>

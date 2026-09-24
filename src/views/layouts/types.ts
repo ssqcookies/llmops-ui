@@ -31,8 +31,6 @@ export interface CurrentUser {
 
 /** 全局弹窗统一状态 */
 export interface LayoutDialogs {
-  /** 创建 AI 应用引导流程 */
-  createApp: boolean
   /** 账号设置弹窗 */
   accountSettings: boolean
   /** 退出登录确认弹窗 */

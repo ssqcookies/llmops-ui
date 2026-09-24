@@ -49,7 +49,23 @@ const ownerFirstChar = (props.item.owner.name || '?').charAt(0)
           <span class="card-title">{{ item.name }}</span>
           <!-- 来源标签：广场应用显示，个人创建不显示 -->
           <span v-if="item.source === 'builtin'" class="source-tag">广场</span>
-          <icon-check-circle-fill v-if="item.verified" class="verified-icon" />
+          <!-- 发布状态：已发布=绿色，草稿=灰色 -->
+          <a-tag
+            v-if="item.status === 'published'"
+            size="small"
+            color="green"
+            class="shrink-0 !rounded-[4px] !text-[11px] !leading-[16px]"
+          >
+            已发布
+          </a-tag>
+          <a-tag
+            v-else
+            size="small"
+            color="gray"
+            class="shrink-0 !rounded-[4px] !text-[11px] !leading-[16px]"
+          >
+            草稿
+          </a-tag>
         </div>
         <div class="card-model-info">{{ item.modelInfo }}</div>
       </div>
@@ -111,9 +127,6 @@ const ownerFirstChar = (props.item.owner.name || '?').charAt(0)
   .source-tag {
     @apply shrink-0 px-1.5 py-0 rounded-[4px] text-[11px] font-medium
            bg-[#f2f3f5] text-[#4e5969] leading-[16px];
-  }
-  .verified-icon {
-    @apply text-[#00b42a] text-[14px] shrink-0;
   }
   .card-model-info {
     @apply text-[12px] text-[#86909c] mt-1 truncate;

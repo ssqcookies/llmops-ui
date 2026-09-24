@@ -20,9 +20,13 @@ const routes: RouteRecordRaw[] = [
          name: ROUTE_NAME.HOME,
         component: () => import('@/views/home/index.vue'),
         },
-      // 个人空间（4个Tab：AI应用/插件/工作流/知识库）
+      // 个人空间（4个Tab：AI应用/插件/工作流/知识库），Tab 由路径参数驱动：/space/:tab
       {
         path: 'space',
+        redirect: '/space/apps',
+      },
+      {
+        path: 'space/:tab',
         name: ROUTE_NAME.PERSONAL_SPACE,
         component: () => import('@/views/space/index.vue'),
       },
@@ -44,7 +48,7 @@ const routes: RouteRecordRaw[] = [
         name: ROUTE_NAME.OPEN_API,
         component: () => import('@/views/openapi/index.vue'),
       },
-      // 知识库详情（知识库列表内嵌于个人空间第 4 个 Tab：/space?tab=knowledge）
+      // 知识库详情（知识库列表内嵌于个人空间第 4 个 Tab：/space/knowledge）
       {
         path: 'knowledge/:datasetId',
         name: ROUTE_NAME.KNOWLEDGE_DETAIL,
@@ -74,6 +78,12 @@ const routes: RouteRecordRaw[] = [
         name: ROUTE_NAME.APP_ORCHESTRATION_DETAIL,
         component: () => import('@/views/app-orchestration/detail/index.vue'),
       },
+      // WebApp 对外发布页（全屏，无需登录，通过 token 访问）
+      {
+        path: 'web-app/:token',
+        name: ROUTE_NAME.WEB_APP,
+        component: () => import('@/views/web-app/index.vue'),
+      },
       {
         path: 'auth/login',
         name: ROUTE_NAME.LOGIN,
@@ -85,6 +95,12 @@ const routes: RouteRecordRaw[] = [
           component: () => import('@/views/auth/AuthorizeView.vue'),
         },
     ],
+  },
+  // 403 无权限页（接口返回 HTTP 403 时跳转）
+  {
+    path: '/403',
+    name: ROUTE_NAME.FORBIDDEN,
+    component: () => import('@/views/ForbiddenView.vue'),
   },
   {
     path: '/:pathMatch(.*)*',
@@ -105,6 +121,8 @@ let authVerified = false
 router.beforeEach(async (to, _from) => {
   // 登录相关路由（/auth/*）直接放行，避免守卫重定向死循环
   if (to.path.startsWith('/auth')) return
+  // WebApp 对外发布页（/web-app/*）通过 token 鉴权，跳过登录校验
+  if (to.path.startsWith('/web-app')) return
   // 本地预检：无凭证或本地时间戳已过期 → 强制跳转登录页
   if (!isLogin()) {
     return { path: '/auth/login' }

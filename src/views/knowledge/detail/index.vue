@@ -106,12 +106,9 @@ const fetchDetail = async () => {
   }
 }
 
-/** 返回个人空间-知识库 Tab */
+/** 返回个人空间-知识库 Tab（/space/knowledge） */
 const handleBack = () => {
-  router.push({
-    name: ROUTE_NAME.PERSONAL_SPACE,
-    query: { tab: 'knowledge' },
-  } as RouteLocationRaw)
+  router.push('/space/knowledge')
 }
 
 /** 打开召回测试抽屉 */

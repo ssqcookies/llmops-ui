@@ -8,6 +8,7 @@ import {
   useGetAssistantAgentMessagesWithPage,
   useDeleteAssistantAgentConversation,
 } from '@/hooks/use-assistant-agent'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 // ============================================================
 // 辅助Agent hooks（真实接口联调）
@@ -427,7 +428,12 @@ onMounted(async () => {
                 class="chat-msg-bubble"
                 :class="msg.role === 'user' ? 'chat-msg-bubble-user' : 'chat-msg-bubble-ai'"
               >
-                <span class="whitespace-pre-wrap break-words">{{ msg.content }}</span>
+                <!-- assistant 消息走 Markdown 渲染（代码块显示为代码框） -->
+                <MarkdownRenderer
+                  v-if="msg.role === 'assistant'"
+                  :content="msg.content"
+                />
+                <span v-else class="whitespace-pre-wrap break-words">{{ msg.content }}</span>
               </div>
 
               <div class="flex items-center gap-2 chat-msg-meta">

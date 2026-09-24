@@ -47,6 +47,8 @@ export interface AppCard extends BaseCard {
   modelInfo: string
   /** 应用来源：builtin = 应用广场添加，custom = 个人创建（后端未返回时默认为 custom） */
   source?: 'builtin' | 'custom'
+  /** 发布状态：draft 草稿 / published 已发布（后端未返回 published 时一律按草稿处理） */
+  status: 'draft' | 'published'
 }
 
 /** AI应用卡片操作菜单枚举 */

@@ -21,8 +21,8 @@ type ModelItem = ProviderGroup['models'][number]
 type ModelParam = ModelItem['parameters'][number]
 type FlatEntry = { provider: ProviderGroup; model: ModelItem }
 
-/** ModelConfig 中的数值字段（排除 model 字符串字段） */
-type NumericModelKey = Exclude<keyof ModelConfig, 'model'>
+/** ModelConfig 中的数值字段（排除 model / provider 字符串字段） */
+type NumericModelKey = Exclude<keyof ModelConfig, 'model' | 'provider'>
 
 /** 参数行渲染结构 */
 interface ParamRow {
@@ -98,10 +98,10 @@ function flatModels(): FlatEntry[] {
   return list
 }
 
-/** 按 label / model 名匹配模型条目 */
+/** 按模型 name（选中值）匹配，兼容历史草稿里存的 label */
 function findEntry(name: string): FlatEntry | undefined {
   if (!name) return undefined
-  return flatModels().find((it) => it.model.label === name || it.model.model === name)
+  return flatModels().find((it) => it.model.name === name || it.model.label === name)
 }
 
 /** 当前选中模型条目 */
@@ -125,7 +125,8 @@ const maxOutputMax = computed(() =>
 
 /** 应用某个模型的接口默认值（4 个采样参数 + 最大回复长度） */
 const applyModelDefaults = (entry: FlatEntry) => {
-  localConfig.value.model = entry.model.label || entry.model.model
+  // 选中值用模型 name（如 deepseek-v3），显示由 label 负责
+  localConfig.value.model = entry.model.name
   entry.model.parameters?.forEach((p: ModelParam) => {
     const mapped = PARAM_KEY_MAP[p.name]
     if (mapped && p.default !== undefined && p.default !== null) {
@@ -192,6 +193,10 @@ const displayInt = (key: NumericModelKey): string => `${localConfig.value[key]}`
 const displayFixed = (row: ParamRow): string => (localConfig.value[row.key] as number).toFixed(row.precision)
 
 const handleOk = () => {
+  // 带上当前 provider 唯一标识（如 deepseek、qwenlm）
+  if (currentModel.value) {
+    localConfig.value.provider = currentModel.value.provider.name
+  }
   emit('update:modelConfig', { ...localConfig.value })
 }
 
@@ -229,7 +234,7 @@ const handleCancel = () => {
                   <icon-robot class="text-[#86909c] text-[14px]" />
                 </span>
                 <span class="text-[14px] text-[#1d2129] truncate">
-                  {{ currentModel.provider.label || currentModel.provider.name }} · {{ currentModel.model.label || currentModel.model.model }}
+                  {{ currentModel.provider.label || currentModel.provider.name }} · {{ currentModel.model.label }}
                 </span>
                 <span class="shrink-0 px-2 py-0.5 rounded-[6px] bg-[#f2f3f5] text-[12px] text-[#4e5969]">
                   {{ fmtTokens(currentModel.model.max_output_tokens) }}
@@ -249,14 +254,14 @@ const handleCancel = () => {
           >
             <a-option
               v-for="model in provider.models"
-              :key="`${provider.name}-${model.model}`"
-              :value="model.label || model.model"
+              :key="`${provider.name}-${model.name}`"
+              :value="model.name"
             >
               <div class="flex items-center gap-2">
                 <span class="w-5 h-5 rounded-[4px] bg-[#f2f3f5] flex items-center justify-center shrink-0">
                   <icon-robot class="text-[#86909c] text-[12px]" />
                 </span>
-                <span class="text-[13px] text-[#1d2129]">{{ model.label || model.model }}</span>
+                <span class="text-[13px] text-[#1d2129]">{{ model.label }}</span>
                 <span class="ml-auto shrink-0 text-[12px] text-[#86909c]">
                   {{ fmtTokens(model.max_output_tokens) }}
                 </span>

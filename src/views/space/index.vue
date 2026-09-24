@@ -82,15 +82,17 @@ interface DatasetListItem {
 const route = useRoute()
 const router = useRouter()
 
-/** 合法 Tab key 集合（用于 query.tab 校验） */
+/** 合法 Tab key 集合（用于路径参数 /space/:tab 校验） */
 const VALID_TABS: PersonalSpaceTab[] = ['apps', 'plugins', 'workflows', 'knowledge']
-/** 当前激活 Tab（支持通过 ?tab=knowledge 定位，详情返回时使用） */
-const queryTab = route.query.tab as string
-const activeTab = ref<PersonalSpaceTab>(
-  VALID_TABS.includes(queryTab as PersonalSpaceTab)
-    ? (queryTab as PersonalSpaceTab)
-    : 'apps',
-)
+/** 从路由路径参数解析当前 Tab，非法值兜底第一个 Tab */
+const resolveTabFromRoute = (): PersonalSpaceTab => {
+  const paramTab = route.params.tab as string
+  return VALID_TABS.includes(paramTab as PersonalSpaceTab)
+    ? (paramTab as PersonalSpaceTab)
+    : 'apps'
+}
+/** 当前激活 Tab（由路由 /space/:tab 驱动） */
+const activeTab = ref<PersonalSpaceTab>(resolveTabFromRoute())
 /** 搜索输入框 v-model */
 const searchInput = ref('')
 /** 列表全局 Loading（切换 Tab、首次加载、分页） */
@@ -250,18 +252,17 @@ const fetchAppList = async () => {
       search_word: appSearchWord.value,
     })
     appList.value = (res?.data?.list ?? []).map((a) => {
-      // 模型信息清洗：过滤空值和占位值
+      // 模型信息清洗：展示 provider · label，label 缺失时回退 model / name；过滤空值和占位值
       const cfg = a.model_config
       const PLACEHOLDERS = new Set(['assistant', 'default', 'unknown', '未设置', ''])
-      const provider = ((cfg?.provider || '').trim()).toLowerCase()
-      const model = ((cfg?.model || '').trim()).toLowerCase()
-      const pValid = provider && !PLACEHOLDERS.has(provider.toLowerCase())
-      const mValid = model && !PLACEHOLDERS.has(model.toLowerCase())
+      const providerRaw = (cfg?.provider || '').trim()
+      const modelLabel = (cfg?.label || cfg?.model || cfg?.name || '').trim()
+      const pValid = !!providerRaw && !PLACEHOLDERS.has(providerRaw.toLowerCase())
+      const mValid = !!modelLabel && !PLACEHOLDERS.has(modelLabel.toLowerCase())
       let modelInfo = ''
-      if (pValid && mValid) modelInfo = `${cfg.provider} · ${cfg.model}`
-      else if (pValid) modelInfo = cfg.provider
-      else if (mValid) modelInfo = cfg.model
-      else modelInfo = cfg?.provider || cfg?.model || ''
+      if (pValid && mValid) modelInfo = `${providerRaw} · ${modelLabel}`
+      else if (pValid) modelInfo = providerRaw
+      else if (mValid) modelInfo = modelLabel
 
       return {
         id: a.id,
@@ -271,9 +272,10 @@ const fetchAppList = async () => {
         modelInfo,
         owner: { name: accountStore.account.name || '我', avatar: accountStore.account.avatar || '' },
         lastEditTime: formatTimestamp(a.updated_at),
-        verified: a.status === 'published',
-        // 来源字段：后端返回则用后端值，否则根据 preset_prompt 是否存在做启发式判断
-        source: a.source || (a.preset_prompt ? 'builtin' : 'custom'),
+        // 发布状态：仅 published 显示已发布，draft 及其余情况按草稿处理
+        status: a.status === 'published' ? 'published' : 'draft',
+        // 来源字段：后端未返回时一律按 custom（个人创建）处理，避免用 preset_prompt 误判
+        source: a.source ?? 'custom',
       }
     })
   } catch {
@@ -336,9 +338,29 @@ const fetchTabLists = async () => {
   }
 }
 
-/** Tab 切换事件 —— 保留当前搜索词继续作用在新 Tab */
+/**
+ * Tab 切换：仅更新路由为 /space/:tab，
+ * activeTab 同步与列表刷新统一由 route.params.tab 监听器处理，
+ * 保证每次点击都能拿到最新的 Tab 列表
+ */
 const onTabChange = (key: string | number) => {
-  activeTab.value = String(key) as PersonalSpaceTab
+  const tab = String(key) as PersonalSpaceTab
+  if (!VALID_TABS.includes(tab) || tab === route.params.tab) return
+  router.push(`/space/${tab}`)
+}
+
+/** 拉取指定 Tab 的最新列表 */
+const fetchListByTab = (tab: PersonalSpaceTab) => {
+  if (tab === 'apps') {
+    fetchAppList()
+    return
+  }
+  if (tab === 'knowledge') {
+    fetchKnowledgeList()
+    return
+  }
+  // 插件 / 工作流
+  fetchTabLists()
 }
 
 /** 搜索回车 */
@@ -400,6 +422,18 @@ const onCreateClick = () => {
   }
   const btn = currentTabOption.value.createBtnText
   Message.success(`点击：${btn}（弹窗预留挂载）`)
+}
+
+/**
+ * 响应左侧菜单“创建 AI 应用”入口（/space/apps?create=app&nonce=...）：
+ * 打开创建弹窗，随后清理 query 中的 create/nonce，避免刷新或返回时重复弹出
+ */
+const handleCreateAppFromQuery = () => {
+  if (route.query.create !== 'app') return
+  createAppMode.value = 'create'
+  editingApp.value = null
+  createAppModalVisible.value = true
+  router.replace({ path: '/space/apps' })
 }
 
 // ============================================================
@@ -583,23 +617,37 @@ const handleLoadMore = async () => {
 // ============================================================
 
 onMounted(() => {
-  fetchAppList()
+  // 预拉插件/工作流/知识库，同时拉取当前 Tab 最新列表
   fetchTabLists()
+  fetchListByTab(activeTab.value)
+  // 直接通过 /space/apps?create=app 进入时打开创建应用弹窗
+  handleCreateAppFromQuery()
 })
 
 /**
- * 监听路由 query.tab 变化 —— 支持从应用广场跳转回个人空间时自动刷新列表
- * SPA 场景下 Space 组件已挂载，路由 push 不会重新触发 onMounted
+ * 监听路由路径参数 tab 变化（/space/:tab）：
+ * SPA 内切换 Tab 仅改变路由参数、组件不会重新挂载，
+ * 每次切换都同步激活态并获取该 Tab 的最新列表
  */
 watch(
-  () => route.query.tab,
-  (tab) => {
-    if (tab && VALID_TABS.includes(tab as PersonalSpaceTab)) {
-      activeTab.value = tab as PersonalSpaceTab
-      if (tab === 'apps') fetchAppList()
-      if (tab === 'knowledge') fetchKnowledgeList()
-      if (tab === 'plugins' || tab === 'workflows') fetchTabLists()
+  () => route.params.tab,
+  (rawTab) => {
+    if (rawTab && VALID_TABS.includes(rawTab as PersonalSpaceTab)) {
+      const tab = rawTab as PersonalSpaceTab
+      activeTab.value = tab
+      fetchListByTab(tab)
     }
+  },
+)
+
+/**
+ * 监听左侧菜单“创建 AI 应用”的跳转：
+ * nonce 每次点击都不同，保证停留在个人空间时重复点击也能重新打开弹窗
+ */
+watch(
+  () => [route.query.create, route.query.nonce],
+  () => {
+    handleCreateAppFromQuery()
   },
 )
 

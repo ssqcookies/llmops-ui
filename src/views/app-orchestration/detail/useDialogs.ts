@@ -67,7 +67,7 @@ const defaultRetrievalConfig: RetrievalConfig = {
 }
 
 const defaultVoiceConfig: VoiceConfig = {
-  voice: '晓晓',
+  voice: 'echo',
   autoPlay: true,
 }
 
