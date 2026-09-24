@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import {
   getDocumentsWithPage,
   updateDocumentEnabled,
+  retryDocument,
 } from '@/services/dataset'
 
 // ============================================================
@@ -71,6 +72,23 @@ const pagination = reactive({
 const rowActionLoading = ref<Record<string, boolean>>({})
 
 // ============================================================
+// 静默轮询：存在处理中文档时自动刷新
+// ============================================================
+
+/** 轮询定时器 */
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+/** 处理中状态集合（非终态） */
+const PROCESSING_STATUS = ['waiting', 'parsing', 'splitting', 'indexing']
+
+/** 是否有处理中的文档 */
+const hasProcessingDoc = computed(() =>
+  dataList.value.some((d) =>
+    PROCESSING_STATUS.includes(String(d.status || '').toLowerCase()),
+  ),
+)
+
+// ============================================================
 // 计算属性
 // ============================================================
 
@@ -90,10 +108,10 @@ const columns = computed<Column[]>(() => [
 // 方法
 // ============================================================
 
-/** 拉取文档列表 */
-const fetchList = async () => {
+/** 拉取文档列表（可静默模式，不显示 loading） */
+const fetchList = async (silent = false) => {
   if (!props.datasetId) return
-  loading.value = true
+  if (!silent) loading.value = true
   try {
     const res = await getDocumentsWithPage(props.datasetId, {
       current_page: pagination.current_page,
@@ -108,11 +126,29 @@ const fetchList = async () => {
       pagination.total = 0
     }
   } catch {
-    dataList.value = []
-    pagination.total = 0
+    if (!silent) {
+      dataList.value = []
+      pagination.total = 0
+    }
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
+}
+
+/** 停止轮询 */
+const stopPolling = () => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+/** 启动轮询（仅在有处理中文档时，且未在轮询中） */
+const startPolling = () => {
+  if (pollTimer || !hasProcessingDoc.value) return
+  pollTimer = setInterval(() => {
+    fetchList(true)
+  }, 3000)
 }
 
 /** 搜索回车 */
@@ -184,6 +220,19 @@ const handleToggleEnabled = async (
   }
 }
 
+/** 重试文档处理（处理失败时调用） */
+const handleRetry = async (row: DocumentRow) => {
+  if (!props.datasetId) return
+  try {
+    await retryDocument(props.datasetId, row.id)
+    Message.success('已重新提交处理')
+    // 重新拉取列表刷新状态
+    await fetchList()
+  } catch {
+    Message.error('重试失败，请稍后重试')
+  }
+}
+
 /** 时间戳 → YYYY-MM-DD HH:mm */
 const formatTime = (ts: number): string => {
   if (!ts) return '-'
@@ -246,10 +295,20 @@ watch(
   (val) => {
     if (val) {
       pagination.current_page = 1
+      stopPolling()
       fetchList()
     }
   },
 )
+
+/** 列表数据更新后：无处理中文档 → 停轮询；有处理中 → 启动轮询 */
+watch(dataList, () => {
+  if (hasProcessingDoc.value) {
+    startPolling()
+  } else {
+    stopPolling()
+  }
+})
 
 // ============================================================
 // 生命周期
@@ -257,6 +316,10 @@ watch(
 
 onMounted(() => {
   fetchList()
+})
+
+onBeforeUnmount(() => {
+  stopPolling()
 })
 </script>
 
@@ -310,8 +373,28 @@ onMounted(() => {
         </template>
 
         <template #status="{ record }">
-          <span :class="['status-tag', statusClass(record.status)]">
-            {{ statusText(record.status) }}
+          <span class="status-cell">
+            <span :class="['status-tag', statusClass(record.status)]">
+              {{ statusText(record.status) }}
+            </span>
+            <!-- 处理失败：显示刷新图标，点击重试 -->
+            <a-tooltip
+              v-if="String(record.status || '').toLowerCase() === 'error'"
+              content="点击重试"
+              :mini="true"
+            >
+              <a-button
+                type="text"
+                size="mini"
+                class="retry-btn"
+                :loading="!!rowActionLoading[record.id]"
+                @click.stop="handleRetry(record)"
+              >
+                <template #icon>
+                  <icon-refresh :size="12" />
+                </template>
+              </a-button>
+            </a-tooltip>
           </span>
         </template>
 
@@ -449,6 +532,9 @@ onMounted(() => {
   .status-tag {
     @apply inline-flex items-center px-2 py-0.5 rounded-[4px] text-[12px] leading-5;
   }
+  .status-cell {
+    @apply inline-flex items-center gap-1;
+  }
   .status-success {
     @apply bg-[#e8ffea] text-[#00b42a];
   }
@@ -460,6 +546,13 @@ onMounted(() => {
   }
   .status-default {
     @apply bg-[#f2f3f5] text-[#86909c];
+  }
+  /* 重试按钮 */
+  .retry-btn {
+    @apply !w-5 !h-5 rounded text-[#f53f3f] hover:!bg-[#ffece8];
+  }
+  .retry-btn :deep(.arco-btn) {
+    @apply text-[12px];
   }
 
   /* 是否禁用列：圆点 + 文案 */

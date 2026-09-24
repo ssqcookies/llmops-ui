@@ -98,6 +98,11 @@ export const updateDocumentName = (dataset_id: string, document_id: string, name
   })
 }
 
+// 重试文档处理（处理失败时重新触发）
+export const retryDocument = (dataset_id: string, document_id: string) => {
+  return post<BaseResponse<any>>(`/datasets/${dataset_id}/documents/${document_id}/retry`)
+}
+
 // 知识库召回测试
 export const hit = (dataset_id: string, req: HitRequest) => {
   return post<HitResponse>(`/datasets/${dataset_id}/hit`, {

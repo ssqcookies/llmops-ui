@@ -15,6 +15,8 @@ const props = defineProps<{
   appDescription: string
   /** 最近编辑时间戳（秒） */
   appLastEditedAt: number | null
+  /** 应用发布状态：published / draft，控制"当前版本"标签显示 */
+  appStatus: string
 }>()
 
 const emit = defineEmits<{
@@ -166,7 +168,7 @@ const latestVersion = () => {
                   #{{ formatVersion(item.version) }}
                 </span>
                 <a-tag
-                  v-if="item.version === latestVersion()"
+                  v-if="item.version === latestVersion() && String(props.appStatus).toLowerCase() === 'published'"
                   size="small"
                   color="arcoblue"
                   class="!rounded !text-[11px] !leading-none !px-1.5 !py-0"

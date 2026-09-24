@@ -160,6 +160,9 @@ const handleCopyWebAppUrl = async () => {
 const handleOpenWeChat = () => { wechatModalVisible.value = true }
 const handleOpenFeishu = () => { feishuModalVisible.value = true }
 
+// ===== 暴露刷新方法给父组件 =====
+defineExpose({ refresh: loadWebAppConfig })
+
 // ===== 生命周期 =====
 onMounted(loadWebAppConfig)
 watch(resolvedAppId, loadWebAppConfig)

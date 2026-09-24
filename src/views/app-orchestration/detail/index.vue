@@ -58,6 +58,8 @@ const appDescription = ref('')
 const savedTime = ref('--:--:--')
 /** 最近编辑完整时间戳（秒），用于发布历史抽屉展示 */
 const appLastEditedAt = ref<number | null>(null)
+/** 应用发布状态（published / draft），用于发布历史抽屉是否显示"当前版本" */
+const appStatus = ref('draft')
 
 /** 根据后端秒级时间戳更新保存时间 */
 const updateSavedTime = (timestamp: number) => {
@@ -74,10 +76,11 @@ const loadAppData = async () => {
       getDraftAppConfig(appId.value),
     ])
 
-    // 1.更新应用名 + 图标 + 描述 + 保存时间
+    // 1.更新应用名 + 图标 + 描述 + 保存时间 + 发布状态
     appName.value = appResp.data.name || '聊天机器人'
     appIcon.value = appResp.data.icon || ''
     appDescription.value = appResp.data.description || ''
+    appStatus.value = appResp.data.status || 'draft'
     if (appResp.data.draft_updated_at) {
       updateSavedTime(appResp.data.draft_updated_at)
       appLastEditedAt.value = appResp.data.draft_updated_at
@@ -338,6 +341,9 @@ const handleContentReviewConfirm = () => {
 /** 发布历史抽屉显隐 */
 const historyVisible = ref(false)
 
+/** 发布配置面板 ref（用于刷新状态） */
+const publishConfigPanelRef = ref<InstanceType<typeof PublishConfigPanel> | null>(null)
+
 /** 正在发布 / 取消发布（防重复点击） */
 const publishing = ref(false)
 const cancellingPublish = ref(false)
@@ -349,6 +355,8 @@ const handlePublish = async () => {
   try {
     await publish(appId.value)
     Message.success('发布成功')
+    // 刷新发布配置面板状态
+    publishConfigPanelRef.value?.refresh()
   } catch {
     // service 已统一 Message.error
   } finally {
@@ -369,6 +377,8 @@ const handleCancelPublishConfirm = async () => {
     await cancelPublish(appId.value)
     Message.success('已取消发布')
     closeCancelPublish()
+    // 刷新发布配置面板状态
+    publishConfigPanelRef.value?.refresh()
   } catch {
     // service 已统一 Message.error
   } finally {
@@ -1143,7 +1153,7 @@ const contentReviewOptions = [
     </template>
 
     <!-- 发布配置面板 -->
-    <PublishConfigPanel v-if="activeTab === 'publish'" class="flex-1 min-h-0 overflow-hidden" />
+    <PublishConfigPanel v-if="activeTab === 'publish'" ref="publishConfigPanelRef" class="flex-1 min-h-0 overflow-hidden" />
 
     <!-- 统计分析面板 -->
     <StatisticsPanel v-if="activeTab === 'analytics'" class="flex-1 min-h-0 overflow-hidden" />
@@ -1237,6 +1247,7 @@ const contentReviewOptions = [
       :app-icon="appIcon"
       :app-description="appDescription"
       :app-last-edited-at="appLastEditedAt"
+      :app-status="appStatus"
       @rollback="loadAppData"
     />
   </div>
