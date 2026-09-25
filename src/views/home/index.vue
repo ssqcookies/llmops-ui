@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, reactive, computed, nextTick, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import type { QuickQuestion, HomeWelcomeConfig, ChatMessageItem } from './types'
+import type { QuickQuestion, HomeWelcomeConfig, ChatMessageItem, PendingImage } from './types'
 import {
   useAssistantAgentChat,
   useStopAssistantAgentChat,
   useGetAssistantAgentMessagesWithPage,
   useDeleteAssistantAgentConversation,
 } from '@/hooks/use-assistant-agent'
+import { uploadImage } from '@/services/upload-file'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 // ============================================================
@@ -61,6 +62,55 @@ const currentTaskId = ref('')
 const inputValue = ref('')
 const messageScrollRef = ref<HTMLElement | null>(null)
 
+// ===== 待发送图片 =====
+const pendingImages = ref<PendingImage[]>([])
+
+/** 图片最多支持 9 张 */
+const MAX_IMAGES = 9
+/** a-upload 重建 key */
+const uploadKey = ref(0)
+
+/** 选择图片：本地预览 + 立即上传，成功后替换为服务端图片地址 */
+const handleSelectImages = async (files: File[]) => {
+  for (const file of files) {
+    const localUrl = URL.createObjectURL(file)
+    pendingImages.value.push({ url: localUrl, uploading: true })
+    try {
+      const resp = await uploadImage(file)
+      const idx = pendingImages.value.findIndex((img) => img.url === localUrl)
+      if (idx > -1) {
+        URL.revokeObjectURL(localUrl)
+        pendingImages.value[idx] = { url: resp.data.image_url, uploading: false }
+      }
+    } catch {
+      pendingImages.value = pendingImages.value.filter((img) => img.url !== localUrl)
+      URL.revokeObjectURL(localUrl)
+    }
+  }
+}
+
+/** 移除待发送图片 */
+const handleRemoveImage = (url: string) => {
+  pendingImages.value = pendingImages.value.filter((img) => img.url !== url)
+  if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+}
+
+/** a-upload 选择图片（auto-upload=false） */
+const handleImageChange = (fileList: { file?: File }[]) => {
+  uploadKey.value += 1
+  const files = fileList.map((item) => item.file).filter((f): f is File => !!f)
+  if (files.length === 0) return
+  const remainSlots = MAX_IMAGES - pendingImages.value.length
+  if (remainSlots <= 0) {
+    Message.warning(`最多上传 ${MAX_IMAGES} 张图片`)
+    return
+  }
+  if (files.length > remainSlots) {
+    Message.warning(`最多上传 ${MAX_IMAGES} 张图片`)
+  }
+  handleSelectImages(files.slice(0, remainSlots))
+}
+
 /** 用户尚未发送任何消息 → 展示欢迎态 */
 const isWelcomeState = computed(
   () => messageList.value.filter((m) => m.role === 'user').length === 0,
@@ -85,19 +135,20 @@ const normalizeSSEEvent = (raw: string) => {
 // 发送消息 / 快捷问题 / 停止响应 / 清空对话
 // ============================================================
 
-const doSend = (query: string) => {
+const doSend = (query: string, imageUrls: string[] = []) => {
   // 0.防止并发发送
   if (aiLoading.value) return
 
   // 1.为本次问答生成 pairId（user + assistant 共享，便于整条删除）
   const pairId = 'pair-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6)
 
-  // 2.追加用户消息
+  // 2.追加用户消息（含图片）
   messageList.value.push({
     id: 'user-' + Date.now(),
     role: 'user',
     content: query,
     pairId,
+    ...(imageUrls.length ? { images: imageUrls } : {}),
   })
   aiLoading.value = true
   isPaused.value = false
@@ -179,8 +230,8 @@ const doSend = (query: string) => {
     }
   }
 
-  // 7.发起真实SSE对话请求
-  handleAssistantAgentChat(query, onSSEEvent).catch(() => finishStreaming())
+  // 7.发起真实SSE对话请求（携带图片 URLs）
+  handleAssistantAgentChat(query, imageUrls, onSSEEvent).catch(() => finishStreaming())
 
   // 8.把手动停止标记函数暴露给顶层（闭包内调用 doSend 返回时）
   return { markManualStop }
@@ -192,9 +243,13 @@ let activeMarkManualStop: (() => void) | null = null
 const handleSend = () => {
   const text = inputValue.value.trim()
   if (!text) return
-  const controller = doSend(text)
+  // 图片仍在上传中则不发送
+  if (pendingImages.value.some((img) => img.uploading)) return
+  const imageUrls = pendingImages.value.map((img) => img.url)
+  const controller = doSend(text, imageUrls)
   activeMarkManualStop = controller?.markManualStop ?? null
   inputValue.value = ''
+  pendingImages.value = []
 }
 
 const handleQuickQuestion = (q: QuickQuestion) => {
@@ -279,6 +334,7 @@ onMounted(async () => {
         id: `${item.id}-q`,
         role: 'user',
         content: item.query,
+        ...(item.image_urls?.length ? { images: item.image_urls } : {}),
         pairId,
       })
       items.push({
@@ -433,7 +489,22 @@ onMounted(async () => {
                   v-if="msg.role === 'assistant'"
                   :content="msg.content"
                 />
-                <span v-else class="whitespace-pre-wrap break-words">{{ msg.content }}</span>
+                <!-- 用户消息：图片 + 文本 -->
+                <template v-else>
+                  <div
+                    v-if="msg.images?.length"
+                    class="mb-2 grid grid-cols-3 gap-1.5"
+                  >
+                    <img
+                      v-for="(url, imgIdx) in msg.images"
+                      :key="imgIdx"
+                      :src="url"
+                      alt="upload"
+                      class="h-[72px] w-[72px] rounded-md object-cover"
+                    />
+                  </div>
+                  <span v-if="msg.content" class="whitespace-pre-wrap break-words">{{ msg.content }}</span>
+                </template>
               </div>
 
               <div class="flex items-center gap-2 chat-msg-meta">
@@ -594,6 +665,37 @@ onMounted(async () => {
     <!-- ========== 底部输入区 ========== -->
     <div class="shrink-0 pb-5 pt-2 relative z-[1]">
       <div class="max-w-[760px] mx-auto">
+        <!-- 待发送图片缩略图 -->
+        <div v-if="pendingImages.length" class="mb-2 flex flex-wrap gap-2 px-1">
+          <div
+            v-for="img in pendingImages"
+            :key="img.url"
+            class="group/img relative h-16 w-16 flex-shrink-0"
+          >
+            <img
+              :src="img.url"
+              alt="pending"
+              class="h-16 w-16 rounded-lg border border-[#e5e6eb] object-cover"
+              :class="{ 'opacity-60': img.uploading }"
+            />
+            <!-- 上传中遮罩 -->
+            <div
+              v-if="img.uploading"
+              class="absolute inset-0 flex items-center justify-center rounded-lg bg-black/20"
+            >
+              <a-spin :size="18" />
+            </div>
+            <!-- 删除 -->
+            <div
+              v-else
+              class="absolute -right-1.5 -top-1.5 flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full bg-[#4e5969] text-white"
+              @click="handleRemoveImage(img.url)"
+            >
+              <icon-close :size="10" />
+            </div>
+          </div>
+        </div>
+
         <div class="input-container">
           <!-- 左侧：消息图标（原型图） -->
           <icon-message class="shrink-0 text-[#86909c] ml-3" :size="20" />
@@ -607,12 +709,35 @@ onMounted(async () => {
             @keydown.enter="handleSend"
           />
 
+          <!-- 添加图片（最多 9 张） -->
+          <a-upload
+            :key="`img-upload-${uploadKey}`"
+            :show-file-list="false"
+            :auto-upload="false"
+            accept="image/*"
+            multiple
+            @change="handleImageChange"
+          >
+            <template #upload-button>
+              <a-tooltip content="添加图片（最多9张）">
+                <a-button
+                  type="text"
+                  shape="circle"
+                  size="small"
+                  class="shrink-0 hover:!bg-[#f2f3f5]"
+                >
+                  <template #icon><icon-plus-circle :size="18" class="text-[#4e5969]" /></template>
+                </a-button>
+              </a-tooltip>
+            </template>
+          </a-upload>
+
           <!-- 右侧：发送按钮（蓝色圆形） -->
           <a-button
             type="primary"
             shape="circle"
             size="small"
-            :disabled="!inputValue.trim()"
+            :disabled="!inputValue.trim() || pendingImages.some((i) => i.uploading)"
             class="shrink-0 mr-1"
             @click="handleSend"
           >

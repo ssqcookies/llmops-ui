@@ -26,6 +26,8 @@ export interface ChatMessageItem {
   id: string
   role: 'user' | 'assistant'
   content: string
+  /** 用户消息携带的图片 URLs */
+  images?: string[]
   tokens?: number
   latency?: number
   recommendations?: string[]
@@ -33,4 +35,10 @@ export interface ChatMessageItem {
   pairId?: string
   /** 消息状态（仅 assistant 有） */
   status?: 'completed' | 'paused' | 'stopped'
+}
+
+/** 待发送图片（本地预览 + 上传状态） */
+export interface PendingImage {
+  url: string
+  uploading: boolean
 }

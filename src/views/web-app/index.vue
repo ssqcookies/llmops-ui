@@ -22,10 +22,12 @@ import {
   deleteConversation,
   updateConversationIsPinned,
 } from '@/services/conversation'
+import { uploadImage } from '@/services/upload-file'
 import type {
   GetWebAppResponse,
   WebAppConversationMessage,
   WebAppConversationSummary,
+  WebAppPendingImage,
 } from '@/models/web-app'
 import WebAppSidebar from './WebAppSidebar.vue'
 import WebAppChat from './WebAppChat.vue'
@@ -60,6 +62,34 @@ const aiLoading = ref(false)
 const currentTaskId = ref('')
 const inputValue = ref('')
 const hasStreamContent = ref(false)
+
+// ===== 待发送图片 =====
+const pendingImages = ref<WebAppPendingImage[]>([])
+
+/** 选择图片：本地预览 + 立即上传，成功后替换为服务端图片地址 */
+const handleSelectImages = async (files: File[]) => {
+  for (const file of files) {
+    const localUrl = URL.createObjectURL(file)
+    pendingImages.value.push({ url: localUrl, uploading: true })
+    try {
+      const resp = await uploadImage(file)
+      const idx = pendingImages.value.findIndex((img) => img.url === localUrl)
+      if (idx > -1) {
+        URL.revokeObjectURL(localUrl)
+        pendingImages.value[idx] = { url: resp.data.image_url, uploading: false }
+      }
+    } catch {
+      pendingImages.value = pendingImages.value.filter((img) => img.url !== localUrl)
+      URL.revokeObjectURL(localUrl)
+    }
+  }
+}
+
+/** 移除待发送图片 */
+const handleRemoveImage = (url: string) => {
+  pendingImages.value = pendingImages.value.filter((img) => img.url !== url)
+  if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+}
 
 // ===== 重命名弹窗 =====
 const renameVisible = ref(false)
@@ -135,6 +165,7 @@ const loadMessages = async (conversationId: string) => {
         id: `${item.id}-q`,
         role: 'user',
         content: item.query,
+        image_urls: item.image_urls ?? [],
         created_at: item.created_at,
       })
       items.push({
@@ -181,16 +212,23 @@ const handleNewConversation = () => {
 const handleSend = async () => {
   const query = inputValue.value.trim()
   if (!query || aiLoading.value) return
+  // 图片仍在上传中则不发送
+  if (pendingImages.value.some((img) => img.uploading)) return
 
-  // 本地先 push user 消息
+  // 取出已上传完成的图片 URLs
+  const imageUrls = pendingImages.value.map((img) => img.url)
+
+  // 本地先 push user 消息（含图片）
   const userMsg: WebAppConversationMessage = {
     id: 'u-' + Date.now(),
     role: 'user',
     content: query,
+    image_urls: imageUrls,
     created_at: Math.floor(Date.now() / 1000),
   }
   messages.value.push(userMsg)
   inputValue.value = ''
+  pendingImages.value = []
   aiLoading.value = true
   hasStreamContent.value = false
   scrollToBottom()
@@ -278,6 +316,7 @@ const handleSend = async () => {
       token.value,
       {
         query,
+        image_urls: imageUrls,
         ...(currentConversationId.value ? { conversation_id: currentConversationId.value } : {}),
       },
       onEvent,
@@ -397,12 +436,15 @@ onMounted(async () => {
       :ai-loading="aiLoading"
       :has-stream-content="hasStreamContent"
       :input-value="inputValue"
-      :can-send="!!inputValue.trim() && !aiLoading"
+      :can-send="!!inputValue.trim() && !aiLoading && !pendingImages.some((i) => i.uploading)"
       :show-opening="messages.length === 0"
+      :pending-images="pendingImages"
       @update:input-value="inputValue = $event"
       @send="handleSend"
       @stop="handleStop"
       @scroll-bottom="scrollToBottom"
+      @select-images="handleSelectImages"
+      @remove-image="handleRemoveImage"
     />
 
     <!-- 重命名弹窗 -->

@@ -568,6 +568,7 @@ const loadDebugMessages = async () => {
         pairId,
         role: 'user',
         content: item.query,
+        ...(item.image_urls?.length ? { images: item.image_urls } : {}),
       })
       items.push({
         id: `${item.id}-a`,
@@ -719,9 +720,8 @@ const doSend = (query: string, imageUrls: string[]) => {
     }
   }
 
-  // 4.发起调试对话 SSE 请求
-  // TODO: 后端 debugChat 支持 image_urls 字段后，将 imageUrls 随 body 一并提交
-  debugChat(appId.value, query, onSSEEvent).catch(() => finishStreaming())
+  // 4.发起调试对话 SSE 请求（携带图片 URLs）
+  debugChat(appId.value, query, imageUrls, onSSEEvent).catch(() => finishStreaming())
 
   return {
     markManualStop: () => {

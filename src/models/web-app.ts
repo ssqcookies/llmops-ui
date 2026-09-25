@@ -33,6 +33,8 @@ export type WebAppConversationMessage = {
   id: string
   role: 'user' | 'assistant'
   content: string
+  /** 用户消息携带的图片 URLs */
+  image_urls?: string[]
   total_token_count?: number
   latency?: number
   /** Agent 思考过程 / 工具调用 / 知识库检索（assistant 消息才有） */
@@ -60,6 +62,7 @@ export type GetWebAppConversationMessagesResponse = BaseResponse<{
 export type WebAppChatRequest = {
   conversation_id?: string
   query: string
+  image_urls?: string[]
 }
 
 // 重命名会话请求结构
@@ -67,3 +70,9 @@ export type RenameWebAppConversationRequest = { name: string }
 
 // 置顶/取消置顶会话请求结构
 export type PinWebAppConversationRequest = { is_pinned: boolean }
+
+/** 待发送图片（本地预览 + 上传状态） */
+export type WebAppPendingImage = {
+  url: string
+  uploading: boolean
+}

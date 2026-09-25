@@ -9,7 +9,12 @@
  *  - 空态：开场白 + 推荐问题
  */
 import { ref, computed, watch } from 'vue'
-import type { GetWebAppResponse, WebAppConversationMessage } from '@/models/web-app'
+import { Message } from '@arco-design/web-vue'
+import type {
+  GetWebAppResponse,
+  WebAppConversationMessage,
+  WebAppPendingImage,
+} from '@/models/web-app'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 const props = defineProps<{
@@ -22,6 +27,8 @@ const props = defineProps<{
   canSend: boolean
   /** 空会话时显示开场白 */
   showOpening: boolean
+  /** 待发送图片列表 */
+  pendingImages: WebAppPendingImage[]
 }>()
 
 const emit = defineEmits<{
@@ -29,7 +36,31 @@ const emit = defineEmits<{
   (e: 'send'): void
   (e: 'stop'): void
   (e: 'scroll-bottom'): void
+  (e: 'selectImages', files: File[]): void
+  (e: 'removeImage', url: string): void
 }>()
+
+/** 图片最多支持 9 张 */
+const MAX_IMAGES = 9
+/** a-upload 重建 key（选择后清空内部 fileList） */
+const uploadKey = ref(0)
+
+/** a-upload 选择图片（auto-upload=false） */
+const handleImageChange = (fileList: { file?: File }[]) => {
+  uploadKey.value += 1
+  const files = fileList.map((item) => item.file).filter((f): f is File => !!f)
+  if (files.length === 0) return
+  const remainSlots = MAX_IMAGES - props.pendingImages.length
+  if (remainSlots <= 0) {
+    Message.warning(`最多上传 ${MAX_IMAGES} 张图片`)
+    return
+  }
+  if (files.length > remainSlots) {
+    Message.warning(`最多上传 ${MAX_IMAGES} 张图片`)
+  }
+  emit('selectImages', files.slice(0, remainSlots))
+}
+
 
 /** avatar：user 和 assistant */
 const USER_AVATAR = {
@@ -167,7 +198,7 @@ const inputPlaceholder = computed(() => `给 "${props.appInfo?.name || 'AI'}" �
                 : 'bg-white border border-[#e5e6eb] text-[#1d2129] rounded-[12px] rounded-tl-sm'"
             >
               <!-- 流式加载中（还没内容）显示转圈 -->
-              <template v-if="!msg.content && aiLoading && messages[messages.length - 1]?.id === msg.id">
+              <template v-if="!msg.content && !msg.image_urls?.length && aiLoading && messages[messages.length - 1]?.id === msg.id">
                 <a-spin :size="20" />
               </template>
               <!-- assistant 消息走 Markdown 渲染（代码块显示为代码框） -->
@@ -175,8 +206,21 @@ const inputPlaceholder = computed(() => `给 "${props.appInfo?.name || 'AI'}" �
                 v-else-if="msg.role === 'assistant'"
                 :content="msg.content"
               />
+              <!-- 用户消息：图片 + 文本 -->
               <template v-else>
-                {{ msg.content }}
+                <div
+                  v-if="msg.image_urls?.length"
+                  class="mb-2 grid grid-cols-3 gap-1.5"
+                >
+                  <img
+                    v-for="(url, imgIdx) in msg.image_urls"
+                    :key="imgIdx"
+                    :src="url"
+                    alt="upload"
+                    class="h-[72px] w-[72px] rounded-md object-cover"
+                  />
+                </div>
+                <span v-if="msg.content">{{ msg.content }}</span>
               </template>
             </div>
 
@@ -249,6 +293,37 @@ const inputPlaceholder = computed(() => `给 "${props.appInfo?.name || 'AI'}" �
 
     <!-- 输入区（无分割线，胶囊与消息区左右对齐） -->
     <div class="flex-shrink-0 px-[clamp(24px,5vw,140px)] pt-2 pb-5 bg-white">
+      <!-- 待发送图片缩略图 -->
+      <div v-if="pendingImages.length" class="mb-2 flex flex-wrap gap-2">
+        <div
+          v-for="img in pendingImages"
+          :key="img.url"
+          class="group/img relative h-16 w-16 flex-shrink-0"
+        >
+          <img
+            :src="img.url"
+            alt="pending"
+            class="h-16 w-16 rounded-lg border border-[#e5e6eb] object-cover"
+            :class="{ 'opacity-60': img.uploading }"
+          />
+          <!-- 上传中遮罩 -->
+          <div
+            v-if="img.uploading"
+            class="absolute inset-0 flex items-center justify-center rounded-lg bg-black/20"
+          >
+            <a-spin :size="18" />
+          </div>
+          <!-- 删除 -->
+          <div
+            v-else
+            class="absolute -right-1.5 -top-1.5 flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full bg-[#4e5969] text-white"
+            @click="emit('removeImage', img.url)"
+          >
+            <icon-close :size="10" />
+          </div>
+        </div>
+      </div>
+
       <div
         class="flex items-center gap-1 h-12 rounded-full border border-[#e5e6eb] bg-white pl-5 pr-2 transition-colors focus-within:border-[#165dff]"
       >
@@ -261,17 +336,28 @@ const inputPlaceholder = computed(() => `给 "${props.appInfo?.name || 'AI'}" �
           @keydown="handleKeyDown"
           rows="1"
         />
-        <!-- 附件 -->
-        <a-tooltip content="添加附件">
-          <a-button
-            type="text"
-            size="mini"
-            shape="circle"
-            class="!w-8 !h-8 !text-[#4e5969] hover:!bg-[#f2f3f5]"
-          >
-            <icon-plus :size="16" />
-          </a-button>
-        </a-tooltip>
+        <!-- 附件：图片上传（最多 9 张） -->
+        <a-upload
+          :key="`img-upload-${uploadKey}`"
+          :show-file-list="false"
+          :auto-upload="false"
+          accept="image/*"
+          multiple
+          @change="handleImageChange"
+        >
+          <template #upload-button>
+            <a-tooltip content="添加图片（最多9张）">
+              <a-button
+                type="text"
+                size="mini"
+                shape="circle"
+                class="!w-8 !h-8 !text-[#4e5969] hover:!bg-[#f2f3f5]"
+              >
+                <icon-plus :size="16" />
+              </a-button>
+            </a-tooltip>
+          </template>
+        </a-upload>
         <!-- 流式中显示停止 -->
         <a-tooltip v-if="aiLoading" content="停止生成">
           <a-button
