@@ -71,8 +71,9 @@ export const debugChat = (
   query: string,
   image_urls: string[],
   onData: (event_response: Record<string, any>) => void,
+  onClose?: (reason: 'done' | 'parse-error' | 'network-error') => void,
 ) => {
-  return ssePost(`/apps/${app_id}/conversations`, { body: { query, image_urls } }, onData)
+  return ssePost(`/apps/${app_id}/conversations`, { body: { query, image_urls } }, onData, onClose)
 }
 
 // 停止某次应用的调试会话

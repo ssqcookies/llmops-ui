@@ -43,6 +43,25 @@ export interface ChatKnowledgeItem {
   content: string
 }
 
+/** Agent 运行过程事件类型 */
+export type ThoughtEventType =
+  | 'agent_thought'
+  | 'long_term_memory_recall'
+  | 'agent_action'
+
+/** Agent 运行过程片段（思考 / 长期记忆召回 / 工具调用） */
+export interface ChatThoughtItem {
+  id: string
+  /** 事件类型 */
+  event: ThoughtEventType
+  /** 思考内容 */
+  thought: string
+  /** 观察结果（工具返回等） */
+  observation: string
+  /** 工具名称 */
+  tool: string
+}
+
 /** 待发送图片（已上传成功得到 url，uploading 表示上传中） */
 export interface ChatPendingImage {
   url: string
@@ -58,6 +77,8 @@ export interface ChatMessageItem {
   pairId: string
   role: 'user' | 'assistant'
   content: string
+  /** 消息创建时间（秒级时间戳） */
+  createdAt?: number
   /** 用户消息附带的图片地址 */
   images?: string[]
   /** assistant 消息状态：已完成 / 已手动终止 */
@@ -68,6 +89,8 @@ export interface ChatMessageItem {
   recommendations?: string[]
   /** 回答时检索到的知识库片段，存在时展示“已搜索知识库”折叠入口 */
   knowledgeItems?: ChatKnowledgeItem[]
+  /** Agent 运行过程片段（思考/长期记忆召回/工具调用），折叠面板展示 */
+  thoughtItems?: ChatThoughtItem[]
 }
 
 /** 检索配置 */

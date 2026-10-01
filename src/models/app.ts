@@ -12,6 +12,8 @@ export type GetAppResponse = BaseResponse<{
   icon: string
   description: string
   status: string
+  /** 应用支持的特性：tool_call / agent_thought / image_input */
+  features: string[]
   draft_updated_at: number
   updated_at: number
   created_at: number

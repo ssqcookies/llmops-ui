@@ -154,6 +154,7 @@ export const ssePost = async (
   url: string,
   fetchOptions: FetchOptionType,
   onData: (data: { [key: string]: any }) => void,
+  onClose?: (reason: SSECloseReason) => void,
 ) => {
   // 5.1 组装基础的fetch请求配置
   const options = Object.assign({}, baseFetchOptions, { method: 'POST' }, fetchOptions)
@@ -170,10 +171,17 @@ export const ssePost = async (
 
   // 5.4 发起fetch请求并处理流式事件响应
   const response = await globalThis.fetch(urlWithPrefix, options as RequestInit)
-  return handleStream(response, onData)
+  return handleStream(response, onData, onClose)
 }
 
-const handleStream = (response: Response, onData: (data: { [key: string]: any }) => void) => {
+/** SSE 流关闭原因：done=正常读完；parse-error=事件数据解析失败；network-error=读取中断 */
+export type SSECloseReason = 'done' | 'parse-error' | 'network-error'
+
+const handleStream = (
+  response: Response,
+  onData: (data: { [key: string]: any }) => void,
+  onClose?: (reason: SSECloseReason) => void,
+) => {
   // 1.检测网络请求是否正常
   if (!response.ok) throw new Error('网络请求失败')
 
@@ -186,7 +194,11 @@ const handleStream = (response: Response, onData: (data: { [key: string]: any })
   const read = () => {
     let hasError = false
     reader?.read().then((result: any) => {
-      if (result.done) return
+      // 流已结束（后端中途异常但未发出收尾事件时，也会走到这里）
+      if (result.done) {
+        onClose?.('done')
+        return
+      }
 
       buffer += decoder.decode(result.value, { stream: true })
       const lines = buffer.split('\n')
@@ -221,7 +233,14 @@ const handleStream = (response: Response, onData: (data: { [key: string]: any })
         hasError = true
       }
 
-      if (!hasError) read()
+      // 解析失败：通知调用方收尾，避免界面一直转圈
+      if (hasError) {
+        onClose?.('parse-error')
+        return
+      }
+      read()
+    }).catch(() => {
+      onClose?.('network-error')
     })
   }
   // 4.调用read函数去执行获取对应的数据

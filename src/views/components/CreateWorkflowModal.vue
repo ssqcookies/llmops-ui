@@ -63,6 +63,10 @@ const rules = computed<Record<string, FieldRule | FieldRule[]>>(() => ({
     { required: true, message: '英文名称不能为空' },
     { maxLength: MAX_TOOL_CALL, message: `英文名称不能超过 ${MAX_TOOL_CALL} 个字符` },
   ],
+  description: [
+    { required: true, message: '工作流描述不能为空' },
+    { maxLength: MAX_DESC, message: `工作流描述不能超过 ${MAX_DESC} 个字符` },
+  ],
 }))
 
 watch(
@@ -225,7 +229,7 @@ const handleSubmit = async () => {
       </a-form-item>
 
       <!-- 4. 应用描述 -->
-      <a-form-item field="description" label="应用描述">
+      <a-form-item field="description" label="应用描述" required>
         <a-textarea
           v-model="formData.description"
           :max-length="MAX_DESC"

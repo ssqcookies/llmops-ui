@@ -78,6 +78,12 @@ const routes: RouteRecordRaw[] = [
         name: ROUTE_NAME.APP_ORCHESTRATION_DETAIL,
         component: () => import('@/views/app-orchestration/detail/index.vue'),
       },
+      // 工作流详情（独立全屏页面，不显示左侧侧边栏）
+      {
+        path: 'workflow/:workflowId',
+        name: ROUTE_NAME.WORKFLOW_DETAIL,
+        component: () => import('@/views/workflow/detail/index.vue'),
+      },
       // WebApp 对外发布页（全屏，无需登录，通过 token 访问）
       {
         path: 'web-app/:token',

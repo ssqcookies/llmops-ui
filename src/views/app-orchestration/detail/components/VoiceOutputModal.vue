@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import type { VoiceConfig } from '../types'
+import { getLanguageModel } from '@/services/language-model'
 
 const props = defineProps<{
   visible: boolean
@@ -30,14 +31,42 @@ const handleCancel = () => {
   emit('cancel')
 }
 
-const voiceOptions = [
-  { label: '晓晓（女声·亲和）', value: '晓晓' },
-  { label: '云扬（男声·磁性）', value: '云扬' },
-  { label: '晓伊（女声·甜美）', value: '晓伊' },
-  { label: '云健（男声·沉稳）', value: '云健' },
-  { label: '晓梦（女声·温柔）', value: '晓梦' },
-  { label: '云帅（男声·阳光）', value: '云帅' },
-]
+// ===== 动态音色列表：从 TTS 模型的 parameters 里读 voice 参数的 options =====
+const voiceOptions = ref<{ label: string; value: string }[]>([])
+const voiceLoading = ref(false)
+
+const loadVoiceOptions = async () => {
+  // 后端 TTS 固定使用 siliconflow / cosyvoice2-0.5b
+  try {
+    voiceLoading.value = true
+    const resp = await getLanguageModel('siliconflow', 'cosyvoice2-0.5b')
+    const params = resp.data?.parameters ?? []
+    const voiceParam = params.find((p: any) => p.name === 'voice')
+    voiceOptions.value = (voiceParam?.options ?? []).map((o: any) => ({
+      label: o.label,
+      value: String(o.value),
+    }))
+    // 若当前选中的音色不在选项里，重置为默认
+    if (voiceOptions.value.length && !voiceOptions.value.some((o) => o.value === localConfig.value.voice)) {
+      const defaultVoice = voiceParam?.default
+      localConfig.value.voice = String(defaultVoice ?? voiceOptions.value[0].value)
+    }
+  } catch {
+    // 接口失败时保留默认列表，不阻塞弹窗
+  } finally {
+    voiceLoading.value = false
+  }
+}
+
+onMounted(loadVoiceOptions)
+
+// 弹窗每次打开时刷新音色列表（模型可能更新）
+watch(
+  () => props.visible,
+  (v) => {
+    if (v && voiceOptions.value.length === 0) loadVoiceOptions()
+  }
+)
 </script>
 
 <template>
@@ -56,6 +85,7 @@ const voiceOptions = [
           <a-select
             v-model="localConfig.voice"
             :options="voiceOptions"
+            :loading="voiceLoading"
             placeholder="请选择音色"
             allow-search
           />

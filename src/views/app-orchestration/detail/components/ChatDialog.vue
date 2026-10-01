@@ -10,7 +10,14 @@
  */
 import { ref, computed, watch, nextTick } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import type { ChatMessageItem, ChatPendingImage } from '../types'
+import type {
+  ChatMessageItem,
+  ChatPendingImage,
+  ChatThoughtItem,
+  ThoughtEventType,
+} from '../types'
+import { formatTime } from '@/utils/format'
+import { useVoiceInput } from '@/hooks/use-audio'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 const props = defineProps<{
@@ -22,6 +29,12 @@ const props = defineProps<{
   voiceInputEnabled: boolean
   /** 语音输出开关（由应用编排“语音输出”配置决定） */
   voiceOutputEnabled: boolean
+  /** 是否支持图片输入（由后端 features 决定，false 时隐藏上传图片 icon） */
+  imageInputEnabled: boolean
+  /** 正在后端合成语音的服务端消息 id */
+  synthesizingVoiceId?: string
+  /** 正在浏览器播放语音的服务端消息 id */
+  playingVoiceId?: string
   /** 待发送图片列表（上传 / 预览由父组件管理） */
   pendingImages: ChatPendingImage[]
 }>()
@@ -54,7 +67,11 @@ const scrollToBottom = async () => {
   }
 }
 watch(
-  () => [props.messageList.length, props.messageList[props.messageList.length - 1]?.content],
+  () => [
+    props.messageList.length,
+    props.messageList[props.messageList.length - 1]?.content,
+    props.messageList[props.messageList.length - 1]?.thoughtItems?.length,
+  ],
   scrollToBottom,
 )
 watch(() => props.isLoading, scrollToBottom)
@@ -93,9 +110,19 @@ const handleRemoveImage = (url: string) => {
   emit('removeImage', url)
 }
 
-/** 语音输入：仅展示入口，识别能力待接入 */
-const handleVoiceInput = () => {
-  // TODO: 接入浏览器语音识别（SpeechRecognition），识别结果回填 inputValue
+/**
+ * 语音输入：录音 → ASR → 文本追加到输入框
+ */
+const { isRecording, isRecognizing, toggleRecording } = useVoiceInput((text) => {
+  inputValue.value = inputValue.value ? `${inputValue.value}${text}` : text
+})
+
+/** 语音状态：0=空闲 1=合成中 2=播放中 */
+const voiceState = (message: ChatMessageItem): 0 | 1 | 2 => {
+  if (!message.serverMessageId) return 0
+  if (props.synthesizingVoiceId === message.serverMessageId) return 1
+  if (props.playingVoiceId === message.serverMessageId) return 2
+  return 0
 }
 
 const handleCopy = async (text: string) => {
@@ -120,6 +147,18 @@ const handleRecommendationClick = (question: string) => {
   emit('send', question, [])
 }
 
+/** 重发：用原用户消息（文本 + 图片）重新发起一轮问答 */
+const handleResend = (message: ChatMessageItem) => {
+  if (props.isLoading) return
+  emit('send', message.content, message.images ?? [])
+}
+
+/** 秒级时间戳 → “2024-08-15 17:54” */
+const formatMessageTime = (sec?: number) => {
+  if (sec === undefined) return ''
+  return formatTime(sec * 1000, 'YYYY-MM-DD HH:mm')
+}
+
 /** “已搜索知识库”折叠状态：按消息 id 记录 */
 const expandedKnowledge = ref<Record<string, boolean>>({})
 const toggleKnowledge = (msgId: string) => {
@@ -130,6 +169,44 @@ const toggleKnowledge = (msgId: string) => {
 const formatLatency = (ms?: number) => {
   if (ms === undefined) return ''
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
+}
+
+/** Agent 运行过程：事件类型 → icon + 标题 + 颜色 */
+const thoughtGroupMap: Record<ThoughtEventType, { icon: string; title: string; color: string }> = {
+  agent_thought: { icon: 'icon-code', title: '隐藏运行流程', color: '#4e5969' },
+  long_term_memory_recall: { icon: 'icon-book', title: '从长期记忆召回内容', color: '#00b42a' },
+  agent_action: { icon: 'icon-link', title: '调用工具', color: '#ff7d00' },
+}
+
+/** 运行过程折叠状态：消息id + 事件类型 */
+const expandedThought = ref<Record<string, boolean>>({})
+const toggleThought = (key: string) => {
+  expandedThought.value[key] = !expandedThought.value[key]
+}
+
+interface ThoughtGroup {
+  event: ThoughtEventType
+  items: ChatThoughtItem[]
+}
+
+/** 把消息的运行过程片段按事件类型分组 */
+const groupThoughts = (message: ChatMessageItem): ThoughtGroup[] => {
+  if (!message.thoughtItems?.length) return []
+  const map: Record<string, ChatThoughtItem[]> = {}
+  for (const item of message.thoughtItems) {
+    if (!map[item.event]) map[item.event] = []
+    map[item.event].push(item)
+  }
+  return Object.keys(map).map((ev) => ({
+    event: ev as ThoughtEventType,
+    items: map[ev] ?? [],
+  }))
+}
+
+/** 是否为该消息当前最后一个运行过程组（流式中在此组显示转圈） */
+const isLastThoughtGroup = (message: ChatMessageItem, group: ThoughtGroup) => {
+  const groups = groupThoughts(message)
+  return groups[groups.length - 1]?.event === group.event
 }
 </script>
 
@@ -225,6 +302,67 @@ const formatLatency = (ms?: number) => {
               </div>
             </div>
 
+            <!-- Agent 运行过程折叠组（思考/长期记忆召回/工具调用），位于气泡上方 -->
+            <div
+              v-if="message.role === 'assistant' && message.thoughtItems?.length"
+              class="w-full"
+            >
+              <div
+                v-for="group in groupThoughts(message)"
+                :key="group.event"
+                class="mb-1"
+              >
+                <div
+                  class="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-[#f2f3f5]"
+                  @click="toggleThought(`${message.id}-${group.event}`)"
+                >
+                  <component
+                    :is="thoughtGroupMap[group.event].icon"
+                    :size="13"
+                    :style="{ color: thoughtGroupMap[group.event].color }"
+                  />
+                  <span class="text-[13px] text-[#4e5969]">
+                    {{ thoughtGroupMap[group.event].title }}
+                  </span>
+                  <!-- 流式生成中：最后一组右侧转圈 -->
+                  <a-spin
+                    v-if="isLoading && isLastThoughtGroup(message, group)"
+                    :size="10"
+                  />
+                  <icon-down
+                    v-else
+                    :size="12"
+                    class="text-[#86909c] transition-transform"
+                    :class="{ 'rotate-180': expandedThought[`${message.id}-${group.event}`] }"
+                  />
+                </div>
+                <!-- 展开内容：思考 / 观察 / 工具 -->
+                <div
+                  v-if="expandedThought[`${message.id}-${group.event}`]"
+                  class="mt-1 w-full space-y-2 rounded-md border border-[#e5e6eb] bg-[#fafbfc] p-3"
+                >
+                  <template v-for="(item, itemIdx) in group.items" :key="itemIdx">
+                    <div v-if="item.thought" class="text-[13px]">
+                      <div class="mb-0.5 text-[12px] text-[#86909c]">思考</div>
+                      <div class="whitespace-pre-wrap break-words leading-relaxed text-[#4e5969]">
+                        {{ item.thought }}
+                      </div>
+                    </div>
+                    <div v-if="item.observation" class="text-[13px]">
+                      <div class="mb-0.5 text-[12px] text-[#86909c]">观察</div>
+                      <div class="whitespace-pre-wrap break-words leading-relaxed text-[#4e5969]">
+                        {{ item.observation }}
+                      </div>
+                    </div>
+                    <div v-if="item.tool" class="text-[13px]">
+                      <div class="mb-0.5 text-[12px] text-[#86909c]">工具</div>
+                      <div class="text-[#4e5969]">{{ item.tool }}</div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+
             <!-- 消息气泡 -->
             <div
               v-if="message.content || message.role === 'user'"
@@ -258,6 +396,51 @@ const formatLatency = (ms?: number) => {
               </template>
               <!-- AI 消息走 Markdown 渲染（代码块支持复制） -->
               <MarkdownRenderer v-else :content="message.content" />
+            </div>
+
+            <!-- 用户消息 meta：重发/复制/删除（hover） + 时间 -->
+            <div
+              v-if="message.role === 'user'"
+              class="flex w-full items-center justify-end gap-2 text-[12px] leading-5 text-[#86909c]"
+            >
+              <!-- 操作：hover 显示 -->
+              <span class="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <a-tooltip content="重发">
+                  <a-button
+                    type="text"
+                    size="mini"
+                    shape="circle"
+                    class="!h-6 !w-6 hover:!bg-[#f2f3f5]"
+                    @click="handleResend(message)"
+                  >
+                    <template #icon><icon-refresh :size="14" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip content="复制">
+                  <a-button
+                    type="text"
+                    size="mini"
+                    shape="circle"
+                    class="!h-6 !w-6 hover:!bg-[#f2f3f5]"
+                    @click="handleCopy(message.content)"
+                  >
+                    <template #icon><icon-copy :size="14" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip content="删除">
+                  <a-button
+                    type="text"
+                    size="mini"
+                    shape="circle"
+                    class="!h-6 !w-6 hover:!bg-[#f2f3f5]"
+                    @click="handleDelete(message)"
+                  >
+                    <template #icon><icon-delete :size="14" /></template>
+                  </a-button>
+                </a-tooltip>
+              </span>
+              <!-- 时间 -->
+              <span v-if="message.createdAt !== undefined">{{ formatMessageTime(message.createdAt) }}</span>
             </div>
 
             <!-- 流式等待：AI 消息尚无内容时显示转圈 -->
@@ -314,13 +497,18 @@ const formatLatency = (ms?: number) => {
                   </a-button>
                 </a-tooltip>
               </span>
-              <!-- 语音播放：开启语音输出后常驻显示 -->
-              <a-tooltip v-if="voiceOutputEnabled && message.status === 'completed'" content="语音播放">
+              <!-- 语音播放：开启语音输出后常驻显示；合成中转圈，播放中高亮 -->
+              <a-tooltip
+                v-if="voiceOutputEnabled && message.status === 'completed'"
+                :content="voiceState(message) === 1 ? '语音合成中' : voiceState(message) === 2 ? '语音播放中' : '语音播放'"
+              >
                 <a-button
                   type="text"
                   size="mini"
                   shape="circle"
                   class="!h-6 !w-6 hover:!bg-[#f2f3f5]"
+                  :class="{ '!text-[#165dff]': voiceState(message) === 2 }"
+                  :loading="voiceState(message) === 1"
                   @click="emit('playVoice', message)"
                 >
                   <template #icon><icon-play-circle :size="15" /></template>
@@ -425,8 +613,9 @@ const formatLatency = (ms?: number) => {
             @press-enter="handleKeydown"
           />
 
-          <!-- 添加图片（最多 9 张） -->
+          <!-- 添加图片（最多 9 张，仅 features 含 image_input 时显示） -->
           <a-upload
+            v-if="imageInputEnabled"
             :key="`img-upload-${uploadKey}`"
             :show-file-list="false"
             :auto-upload="false"
@@ -449,16 +638,23 @@ const formatLatency = (ms?: number) => {
             </template>
           </a-upload>
 
-          <!-- 语音输入：由应用编排“语音输入”开关决定显隐 -->
-          <a-tooltip v-if="voiceInputEnabled" content="语音输入">
+          <!-- 语音输入：由应用编排“语音输入”开关决定显隐，录音中变红，识别中转圈 -->
+          <a-tooltip
+            v-if="voiceInputEnabled"
+            :content="isRecording ? '停止录音' : isRecognizing ? '正在识别…' : '语音输入'"
+          >
             <a-button
               type="text"
               shape="circle"
               class="flex-shrink-0 !bg-transparent hover:!bg-[#f2f3f5]"
-              @click="handleVoiceInput"
+              :loading="isRecognizing"
+              @click="toggleRecording"
             >
               <template #icon>
-                <icon-voice :size="22" class="text-[#4e5969]" />
+                <icon-voice
+                  :size="22"
+                  :class="isRecording ? 'text-[#f53f3f] animate-pulse' : 'text-[#4e5969]'"
+                />
               </template>
             </a-button>
           </a-tooltip>

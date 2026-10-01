@@ -9,6 +9,7 @@ import {
   useDeleteAssistantAgentConversation,
 } from '@/hooks/use-assistant-agent'
 import { uploadImage } from '@/services/upload-file'
+import { formatTime } from '@/utils/format'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 // ============================================================
@@ -148,6 +149,7 @@ const doSend = (query: string, imageUrls: string[] = []) => {
     role: 'user',
     content: query,
     pairId,
+    createdAt: Math.floor(Date.now() / 1000),
     ...(imageUrls.length ? { images: imageUrls } : {}),
   })
   aiLoading.value = true
@@ -160,6 +162,8 @@ const doSend = (query: string, imageUrls: string[] = []) => {
   let localDone = false
   /** 用户是否手动点击了"停止响应" */
   let localIsManualStop = false
+  /** 空闲看门狗：90s 无事件强制收尾 */
+  let watchdog: ReturnType<typeof setTimeout> | null = null
 
   // 4.确保流式AI消息存在并返回该消息
   const ensureStreamingMsg = (): ChatMessageItem | null => {
@@ -185,6 +189,10 @@ const doSend = (query: string, imageUrls: string[] = []) => {
   const finishStreaming = () => {
     if (localDone) return
     localDone = true
+    if (watchdog) {
+      clearTimeout(watchdog)
+      watchdog = null
+    }
     // 给 assistant 消息标记状态：手动停止 → stopped，否则 → completed
     const aiMsg = localMsgId ? messageList.value.find((m) => m.id === localMsgId) : null
     if (aiMsg) aiMsg.status = localIsManualStop ? 'stopped' : 'completed'
@@ -197,6 +205,9 @@ const doSend = (query: string, imageUrls: string[] = []) => {
   // 6.SSE事件处理器
   const onSSEEvent = (event_response: Record<string, any>) => {
     if (localDone) return
+    // 每收到一个事件重置空闲看门狗
+    if (watchdog) clearTimeout(watchdog)
+    watchdog = setTimeout(abortWithError, 90_000)
     const { event: rawEvent, data } = event_response
     if (data?.task_id) currentTaskId.value = data.task_id
     const event = normalizeSSEEvent(rawEvent)
@@ -230,8 +241,21 @@ const doSend = (query: string, imageUrls: string[] = []) => {
     }
   }
 
-  // 7.发起真实SSE对话请求（携带图片 URLs）
-  handleAssistantAgentChat(query, imageUrls, onSSEEvent).catch(() => finishStreaming())
+  /**
+   * 异常收尾：流已关闭但未收到 agent_end/stop 收尾事件
+   * （后端中间步骤报错被吞掉时，HTTP 200 但数据为空）
+   */
+  const abortWithError = () => {
+    if (localDone) return
+    const aiMsg = ensureStreamingMsg()
+    if (aiMsg && !aiMsg.content) aiMsg.content = '服务异常，未返回任何内容，请稍后重试'
+    finishStreaming()
+  }
+  // 初始看门狗
+  watchdog = setTimeout(abortWithError, 90_000)
+
+  // 7.发起真实SSE对话请求（携带图片 URLs + 流异常关闭回调）
+  handleAssistantAgentChat(query, imageUrls, onSSEEvent, abortWithError).catch(abortWithError)
 
   // 8.把手动停止标记函数暴露给顶层（闭包内调用 doSend 返回时）
   return { markManualStop }
@@ -298,6 +322,18 @@ const handleDeletePair = (pairId?: string) => {
   messageList.value = messageList.value.filter((m) => m.pairId !== pairId)
 }
 
+/** 重发：用原用户消息（文本 + 图片）重新发起一轮问答 */
+const handleResend = (msg: ChatMessageItem) => {
+  if (aiLoading.value) return
+  doSend(msg.content, msg.images ?? [])
+}
+
+/** 秒级时间戳 → “2024-08-15 17:54” */
+const formatMessageTime = (sec?: number) => {
+  if (sec === undefined) return ''
+  return formatTime(sec * 1000, 'YYYY-MM-DD HH:mm')
+}
+
 /** 重试：找到 assistant 消息对应的 user 消息内容，重新发送 */
 const handleRetry = (msg: ChatMessageItem) => {
   if (msg.role !== 'assistant' || !msg.pairId) return
@@ -334,6 +370,7 @@ onMounted(async () => {
         id: `${item.id}-q`,
         role: 'user',
         content: item.query,
+        createdAt: item.created_at,
         ...(item.image_urls?.length ? { images: item.image_urls } : {}),
         pairId,
       })
@@ -507,7 +544,50 @@ onMounted(async () => {
                 </template>
               </div>
 
-              <div class="flex items-center gap-2 chat-msg-meta">
+              <!-- 用户消息 meta：重发/复制/删除（hover） + 时间 -->
+              <div
+                v-if="msg.role === 'user'"
+                class="flex items-center justify-end gap-2 chat-msg-meta"
+              >
+                <span class="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <a-tooltip content="重发">
+                    <a-button
+                      type="text"
+                      size="mini"
+                      shape="circle"
+                      class="!h-5 !w-5 hover:!bg-[#f2f3f5]"
+                      @click="handleResend(msg)"
+                    >
+                      <template #icon><icon-refresh :size="13" /></template>
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip content="复制">
+                    <a-button
+                      type="text"
+                      size="mini"
+                      shape="circle"
+                      class="!h-5 !w-5 hover:!bg-[#f2f3f5]"
+                      @click="handleCopy(msg.content)"
+                    >
+                      <template #icon><icon-copy :size="13" /></template>
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip content="删除">
+                    <a-button
+                      type="text"
+                      size="mini"
+                      shape="circle"
+                      class="!h-5 !w-5 hover:!bg-[#f2f3f5]"
+                      @click="handleDeletePair(msg.pairId)"
+                    >
+                      <template #icon><icon-delete :size="13" /></template>
+                    </a-button>
+                  </a-tooltip>
+                </span>
+                <span v-if="msg.createdAt !== undefined">{{ formatMessageTime(msg.createdAt) }}</span>
+              </div>
+
+              <div v-if="msg.role === 'assistant'" class="flex items-center gap-2 chat-msg-meta">
                 <!-- 状态标签（仅 assistant 消息 + 有 status 时显示） -->
                 <template v-if="msg.role === 'assistant' && msg.status">
                   <span

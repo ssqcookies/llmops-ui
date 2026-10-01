@@ -15,6 +15,7 @@ import type {
   WebAppConversationMessage,
   WebAppPendingImage,
 } from '@/models/web-app'
+import { formatTime } from '@/utils/format'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 const props = defineProps<{
@@ -38,7 +39,27 @@ const emit = defineEmits<{
   (e: 'scroll-bottom'): void
   (e: 'selectImages', files: File[]): void
   (e: 'removeImage', url: string): void
+  /** 重发：用原用户消息重新发起问答 */
+  (e: 'resend', msg: WebAppConversationMessage): void
+  /** 删除：删除该组问答 */
+  (e: 'deleteMessage', msg: WebAppConversationMessage): void
 }>()
+
+/** 复制消息文本 */
+const handleCopy = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    Message.success('已复制')
+  } catch {
+    Message.error('复制失败')
+  }
+}
+
+/** 秒级时间戳 → “2024-08-15 17:54” */
+const formatMessageTime = (sec?: number) => {
+  if (sec === undefined) return ''
+  return formatTime(sec * 1000, 'YYYY-MM-DD HH:mm')
+}
 
 /** 图片最多支持 9 张 */
 const MAX_IMAGES = 9
@@ -222,6 +243,49 @@ const inputPlaceholder = computed(() => `给 "${props.appInfo?.name || 'AI'}" �
                 </div>
                 <span v-if="msg.content">{{ msg.content }}</span>
               </template>
+            </div>
+
+            <!-- 用户消息 meta：重发/复制/删除（hover） + 时间 -->
+            <div
+              v-if="msg.role === 'user'"
+              class="flex w-full items-center justify-end gap-2 text-[12px] leading-5 text-[#86909c]"
+            >
+              <span class="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <a-tooltip content="重发">
+                  <a-button
+                    type="text"
+                    size="mini"
+                    shape="circle"
+                    class="!h-6 !w-6 hover:!bg-[#f2f3f5]"
+                    @click="emit('resend', msg)"
+                  >
+                    <template #icon><icon-refresh :size="14" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip content="复制">
+                  <a-button
+                    type="text"
+                    size="mini"
+                    shape="circle"
+                    class="!h-6 !w-6 hover:!bg-[#f2f3f5]"
+                    @click="handleCopy(msg.content)"
+                  >
+                    <template #icon><icon-copy :size="14" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip content="删除">
+                  <a-button
+                    type="text"
+                    size="mini"
+                    shape="circle"
+                    class="!h-6 !w-6 hover:!bg-[#f2f3f5]"
+                    @click="emit('deleteMessage', msg)"
+                  >
+                    <template #icon><icon-delete :size="14" /></template>
+                  </a-button>
+                </a-tooltip>
+              </span>
+              <span v-if="msg.created_at !== undefined">{{ formatMessageTime(msg.created_at) }}</span>
             </div>
 
             <!-- agent_thoughts 折叠面板（仅 assistant + 有 thoughts） -->

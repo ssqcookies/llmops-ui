@@ -17,16 +17,20 @@ import type { UpdateDraftAppConfigRequest } from '@/models/app'
 import { uploadImage } from '@/services/upload-file'
 import { generateSuggestedQuestions } from '@/services/ai'
 import { formatTime } from '@/utils/format'
+import { useAudioPlayer } from '@/hooks/use-audio'
 import type {
   CollapseGroup,
   ChatMessageItem,
   ChatPendingImage,
   ChatKnowledgeItem,
+  ChatThoughtItem,
+  ThoughtEventType,
   PluginItem,
   PluginCategory,
 } from './types'
 import { useDialogs } from './useDialogs'
 import { getIcon } from './icons'
+import { parseAgentStream } from './agent-stream'
 import ConfigCollapse from './components/ConfigCollapse.vue'
 import ChatDialog from './components/ChatDialog.vue'
 import ModelSettingsModal from './components/ModelSettingsModal.vue'
@@ -60,6 +64,10 @@ const savedTime = ref('--:--:--')
 const appLastEditedAt = ref<number | null>(null)
 /** 应用发布状态（published / draft），用于发布历史抽屉是否显示"当前版本" */
 const appStatus = ref('draft')
+/** 应用支持的特性列表 */
+const appFeatures = ref<string[]>([])
+/** 是否支持图片输入（控制调试面板上传图片 icon 显隐） */
+const imageInputEnabled = computed(() => appFeatures.value.includes('image_input'))
 
 /** 根据后端秒级时间戳更新保存时间 */
 const updateSavedTime = (timestamp: number) => {
@@ -76,11 +84,12 @@ const loadAppData = async () => {
       getDraftAppConfig(appId.value),
     ])
 
-    // 1.更新应用名 + 图标 + 描述 + 保存时间 + 发布状态
+    // 1.更新应用名 + 图标 + 描述 + 保存时间 + 发布状态 + 特性
     appName.value = appResp.data.name || '聊天机器人'
     appIcon.value = appResp.data.icon || ''
     appDescription.value = appResp.data.description || ''
     appStatus.value = appResp.data.status || 'draft'
+    appFeatures.value = appResp.data.features ?? []
     if (appResp.data.draft_updated_at) {
       updateSavedTime(appResp.data.draft_updated_at)
       appLastEditedAt.value = appResp.data.draft_updated_at
@@ -295,18 +304,12 @@ const handleAddKnowledgeConfirm = (ids: string[]) => {
 };
 const handleLongTermMemoryToggle = (value: boolean) => {
   longTermMemoryEnabled.value = value;
-  if (value) {
-    state.longTermMemory.enabled = true;
-    openLongTermMemory();
-  } else {
-    state.longTermMemory.enabled = false;
-  }
+  state.longTermMemory.enabled = value;
 };
 const handleVoiceOutputToggle = (value: boolean) => {
   voiceOutputEnabled.value = value;
   if (value) {
     state.voiceConfig.autoPlay = true;
-    openVoice();
   }
 };
 /** 内容审查合并开关：输入/输出任一开启即认为开启；整体关闭则两个都关 */
@@ -543,6 +546,35 @@ const buildKnowledgeItems = (thoughts?: RawAgentThought[]): ChatKnowledgeItem[] 
     .filter((item) => item.content)
 }
 
+/** 原始事件名 → 运行过程事件类型 */
+const normalizeThoughtEvent = (event?: string): ThoughtEventType => {
+  const name = (event || '').toLowerCase()
+  if (name === 'long_term_memory_recall' || name === 'agent_action') return name
+  return 'agent_thought'
+}
+
+/**
+ * 合并结构化片段与内联片段并去重
+ * （后端结构化事件与流内 <think>/<tool_call> 标签可能表达同一内容）
+ */
+const dedupThoughts = (items: ChatThoughtItem[]): ChatThoughtItem[] => {
+  const result: ChatThoughtItem[] = []
+  for (const item of items) {
+    const text = (item.thought || item.observation || '').trim()
+    if (!text) continue
+    const isDup = result.some((r) => {
+      if (r.event !== item.event) return false
+      const rt = (r.thought || r.observation || '').trim()
+      if (rt === text) return true
+      // 长文本包含关系（结构化分片 vs 内联整段）
+      if (rt.length > 10 && (rt.includes(text) || text.includes(rt))) return true
+      return false
+    })
+    if (!isDup) result.push(item)
+  }
+  return result
+}
+
 /** 加载调试会话历史消息（后端按 created_at 倒序返回，逐页拉取后 reverse 成正序映射；page_size 范围 1-50） */
 const loadDebugMessages = async () => {
   try {
@@ -568,19 +600,42 @@ const loadDebugMessages = async () => {
         pairId,
         role: 'user',
         content: item.query,
+        createdAt: item.created_at,
         ...(item.image_urls?.length ? { images: item.image_urls } : {}),
       })
+      // 结构化运行过程（排除知识库检索，知识库片段单独由 knowledgeItems 展示）
+      const rawThoughts = (item.agent_thoughts as RawAgentThought[]) || []
+      const structuredThoughts: ChatThoughtItem[] = rawThoughts
+        .filter((t) => !t.event?.toLowerCase().includes('dataset_retrieval'))
+        .map((t, idx) => ({
+          id: `${item.id}-t${idx}`,
+          event: normalizeThoughtEvent(t.event),
+          thought: t.thought || '',
+          observation: t.observation || '',
+          tool: t.tool || '',
+        }))
+      // 存储的 answer 中若仍内联 <think>/<tool_call> 标签，解析分离
+      const parsed = parseAgentStream(item.answer || '')
+      const inlineThoughts: ChatThoughtItem[] = parsed.thoughts.map((t, idx) => ({
+        id: `${item.id}-i${idx}`,
+        event: t.event,
+        thought: t.event === 'agent_thought' ? t.text : '',
+        observation: t.event === 'agent_action' ? t.text : '',
+        tool: '',
+      }))
+      const thoughtItems = dedupThoughts([...structuredThoughts, ...inlineThoughts])
       items.push({
         id: `${item.id}-a`,
         pairId,
         role: 'assistant',
-        content: item.answer,
+        content: parsed.answer,
         serverMessageId: item.id,
         tokens: item.total_token_count || undefined,
         // 后端 latency 单位为秒，前端统一转毫秒
         latency: item.latency ? Math.round(item.latency * 1000) : undefined,
         status: 'completed',
-        knowledgeItems: buildKnowledgeItems(item.agent_thoughts as RawAgentThought[]),
+        knowledgeItems: buildKnowledgeItems(rawThoughts),
+        ...(thoughtItems.length ? { thoughtItems } : {}),
       })
     })
     chatMessages.value = items
@@ -616,6 +671,11 @@ const fetchSuggestedQuestions = async (message: ChatMessageItem) => {
 const doSend = (query: string, imageUrls: string[]) => {
   if (isChatLoading.value) return null
 
+  // 新一轮问答开始：清除历史 AI 消息的推荐问题，界面上仅保留最新回复的推荐
+  chatMessages.value.forEach((m) => {
+    if (m.role === 'assistant' && m.recommendations) m.recommendations = undefined
+  })
+
   // 1.一问一答共享 pairId，追加用户消息（含图片）
   const pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   chatMessages.value.push({
@@ -623,41 +683,82 @@ const doSend = (query: string, imageUrls: string[]) => {
     pairId,
     role: 'user',
     content: query,
+    createdAt: Math.floor(Date.now() / 1000),
     ...(imageUrls.length ? { images: imageUrls } : {}),
   })
   isChatLoading.value = true
   currentDebugTaskId.value = ''
 
-  // 2.本次请求的局部状态，避免多请求串流
-  let localMsgId = ''
+  // 2.立即创建 AI 占位消息（显示“思考中”转圈，避免等待首个 SSE 事件期间界面空白）
+  const placeholderMsg: ChatMessageItem = {
+    id: `ai-${Date.now()}`,
+    pairId,
+    role: 'assistant',
+    content: '',
+  }
+  chatMessages.value.push(placeholderMsg)
+
+  // 本次请求的局部状态，避免多请求串流
+  let localMsgId = placeholderMsg.id
   let localDone = false
   /** 用户是否手动点击了“停止响应” */
   let localIsManualStop = false
+  /** 空闲看门狗定时器：90s 无任何事件则强制收尾 */
+  let watchdog: ReturnType<typeof setTimeout> | null = null
+  /** 模型原始 answer 文本累积（解析前） */
+  let rawAnswer = ''
+  /** 后端是否已通过 agent_thought 事件告知本次回复以思考开始 */
+  let assumeThink = false
+  /** 结构化运行过程片段（由事件直接携带） */
+  const structuredThoughts: ChatThoughtItem[] = []
 
-  /** 确保流式 AI 消息已存在并返回 */
+  /** 确保流式 AI 消息已存在并返回（占位消息已在发送时创建） */
   const ensureStreamingMsg = (): ChatMessageItem | null => {
     if (localDone) return null
-    if (!localMsgId) {
-      const aiMsg: ChatMessageItem = {
-        id: `ai-${Date.now()}`,
-        pairId,
-        role: 'assistant',
-        content: '',
-      }
-      chatMessages.value.push(aiMsg)
-      localMsgId = aiMsg.id
-    }
     return chatMessages.value.find((m) => m.id === localMsgId) ?? null
+  }
+
+  /** 追加结构化运行过程片段（无文本内容时作为信号，去重时会被跳过） */
+  const addStructuredThought = (type: ThoughtEventType, data: Record<string, any>) => {
+    structuredThoughts.push({
+      id: (data.id as string) || `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      event: type,
+      thought: data.thought || '',
+      observation: data.observation || '',
+      tool: data.tool || '',
+    })
+  }
+
+  /** 基于原始串解析，把干净正文与运行过程同步到消息 */
+  const syncFromRaw = () => {
+    const aiMsg = ensureStreamingMsg()
+    if (!aiMsg) return
+    const parsed = parseAgentStream(rawAnswer, assumeThink)
+    aiMsg.content = parsed.answer
+    const inlineThoughts: ChatThoughtItem[] = parsed.thoughts.map((t, idx) => ({
+      id: `inline-${idx}`,
+      event: t.event,
+      thought: t.event === 'agent_thought' ? t.text : '',
+      observation: t.event === 'agent_action' ? t.text : '',
+      tool: '',
+    }))
+    const merged = dedupThoughts([...structuredThoughts, ...inlineThoughts])
+    aiMsg.thoughtItems = merged.length ? merged : undefined
   }
 
   /** 结束本次流式会话，按是否手动停止标记状态 */
   const finishStreaming = () => {
     if (localDone) return
     localDone = true
+    if (watchdog) {
+      clearTimeout(watchdog)
+      watchdog = null
+    }
     const aiMsg = localMsgId ? chatMessages.value.find((m) => m.id === localMsgId) : null
     if (aiMsg) {
       aiMsg.status = localIsManualStop ? 'stopped' : 'completed'
       if (!aiMsg.knowledgeItems?.length) aiMsg.knowledgeItems = undefined
+      if (!aiMsg.thoughtItems?.length) aiMsg.thoughtItems = undefined
     }
     isChatLoading.value = false
     currentDebugTaskId.value = ''
@@ -666,6 +767,13 @@ const doSend = (query: string, imageUrls: string[]) => {
   // 3.SSE 事件处理
   const onSSEEvent = (eventResponse: Record<string, unknown>) => {
     if (localDone) return
+    // 每收到一个事件就重置空闲看门狗
+    if (watchdog) clearTimeout(watchdog)
+    watchdog = setTimeout(() => {
+      const aiMsg = ensureStreamingMsg()
+      if (aiMsg && !aiMsg.content) aiMsg.content = '服务响应超时，请稍后重试'
+      finishStreaming()
+    }, 90_000)
     const { event: rawEvent, data } = eventResponse as {
       event: string
       data: Record<string, any>
@@ -677,13 +785,46 @@ const doSend = (query: string, imageUrls: string[]) => {
       case 'agent_message': {
         const aiMsg = ensureStreamingMsg()
         if (aiMsg && data.answer) {
-          aiMsg.content += data.answer
+          rawAnswer += data.answer
           if (!aiMsg.serverMessageId) aiMsg.serverMessageId = data.message_id || data.id
           if (data.total_token_count) aiMsg.tokens = data.total_token_count
           if (data.latency) aiMsg.latency = Math.round(data.latency * 1000)
+          syncFromRaw()
         }
         break
       }
+      case 'agent_thought': {
+        // 思考开始信号；data.event 可能嵌套具体子事件（同 WebApp 协议）
+        assumeThink = true
+        const sub = typeof data.event === 'string' ? data.event.toLowerCase() : ''
+        if (sub && sub !== 'agent_message') {
+          if (sub.includes('dataset_retrieval')) {
+            const aiMsg = ensureStreamingMsg()
+            if (aiMsg && (data.thought || data.observation)) {
+              aiMsg.knowledgeItems = [
+                ...(aiMsg.knowledgeItems ?? []),
+                { title: data.tool || '知识库片段', content: data.thought || data.observation },
+              ]
+            }
+          } else if (sub === 'long_term_memory_recall' || sub === 'agent_action') {
+            addStructuredThought(sub, data)
+          } else {
+            addStructuredThought('agent_thought', data)
+          }
+        } else {
+          addStructuredThought('agent_thought', data)
+        }
+        syncFromRaw()
+        break
+      }
+      case 'long_term_memory_recall':
+        addStructuredThought('long_term_memory_recall', data)
+        syncFromRaw()
+        break
+      case 'agent_action':
+        addStructuredThought('agent_action', data)
+        syncFromRaw()
+        break
       case 'dataset_retrieval': {
         // 知识库检索过程实时收集，用于“已搜索知识库”折叠面板
         const aiMsg = ensureStreamingMsg()
@@ -714,14 +855,34 @@ const doSend = (query: string, imageUrls: string[]) => {
         finishStreaming()
         break
       }
-      // ping / agent_thought / agent_action / long_term_memory_recall 暂不处理
+      // ping 无需处理
       default:
         break
     }
   }
 
   // 4.发起调试对话 SSE 请求（携带图片 URLs）
-  debugChat(appId.value, query, imageUrls, onSSEEvent).catch(() => finishStreaming())
+  /**
+   * 异常收尾：流已关闭但未收到 agent_end/stop 等收尾事件
+   * （后端中间步骤报错被吞掉时，HTTP 仍为 200、数据为空）
+   */
+  const abortWithError = () => {
+    if (localDone) return
+    const aiMsg = ensureStreamingMsg()
+    if (aiMsg && !aiMsg.content) {
+      aiMsg.content = '服务异常，未返回任何内容，请稍后重试'
+    }
+    finishStreaming()
+  }
+
+  // 启动空闲看门狗：90s 内没有任何事件，判定为异常挂起并强制收尾
+  const armWatchdog = () => {
+    if (watchdog) clearTimeout(watchdog)
+    watchdog = setTimeout(abortWithError, 90_000)
+  }
+  armWatchdog()
+
+  debugChat(appId.value, query, imageUrls, onSSEEvent, abortWithError).catch(abortWithError)
 
   return {
     markManualStop: () => {
@@ -773,11 +934,20 @@ const handleStopResponse = () => {
   }, 2000)
 }
 
-/** 语音播放：后端 TTS 接口暂未提供 */
+/**
+ * 语音播放：调 TTS 接口流式合成后播放
+ */
+const {
+  synthesizingId: synthesizingVoiceId,
+  playingId: playingVoiceId,
+  play: playMessageVoice,
+} = useAudioPlayer()
 const handlePlayVoice = (message: ChatMessageItem) => {
-  // TODO: 接入语音播放接口（TTS），入参为 message.serverMessageId
-  void message
-  Message.info('语音播放功能即将上线')
+  if (!message.serverMessageId) {
+    Message.warning('该消息暂不支持语音播放')
+    return
+  }
+  playMessageVoice(message.serverMessageId)
 }
 
 /** 选择图片：本地预览 + 立即上传，成功后替换为服务端图片地址 */
@@ -875,7 +1045,7 @@ const contentReviewOptions = [
             :loading="publishing"
             @click="handlePublish"
           >
-            <template #icon><icon-cloud-upload :size="16" /></template>
+            <template #icon><icon-upload :size="16" /></template>
             更新发布
           </a-button>
           <a-dropdown>
@@ -1082,10 +1252,19 @@ const contentReviewOptions = [
                   <a-select v-model="voiceOutputEnabled" class="w-24" :options="voiceOutputOptions" @change="handleVoiceOutputToggle" />
                 </template>
                 <template #voiceOutput>
-                  <div class="flex flex-col gap-2">
+                  <div class="flex flex-col gap-3">
                     <div class="text-xs text-[#86909c]">
-                      在 Bot 回复后，自动根据对话内容提供 3 条用户提问建议。
+                      启用后，可将 Bot 回复内容通过语音播放。
                     </div>
+                    <!-- 开启后显示设置按钮，点击才弹窗（与内容审查交互一致） -->
+                    <a-button
+                      v-if="voiceOutputEnabled"
+                      class="w-full"
+                      @click="openVoice"
+                    >
+                      <template #icon><icon-settings :size="14" /></template>
+                      设置
+                    </a-button>
                   </div>
                 </template>
 
@@ -1139,6 +1318,9 @@ const contentReviewOptions = [
             :app-icon="appIcon"
             :voice-input-enabled="voiceInputEnabled"
             :voice-output-enabled="voiceOutputEnabled"
+            :image-input-enabled="imageInputEnabled"
+            :synthesizing-voice-id="synthesizingVoiceId"
+            :playing-voice-id="playingVoiceId"
             :pending-images="pendingImages"
             @send="handleSendMessage"
             @delete-message="handleDeleteMessage"
@@ -1169,8 +1351,9 @@ const contentReviewOptions = [
     <!-- 长期记忆弹窗 -->
     <LongTermMemoryModal
       :visible="state.longTermMemoryVisible"
-      :config="state.longTermMemory"
-      @update:config="(val) => { Object.assign(state.longTermMemory, val); handleLongTermMemoryConfirm(); }"
+      :app-id="appId"
+      :enabled="longTermMemoryEnabled"
+      @saved="handleLongTermMemoryConfirm"
       @cancel="closeLongTermMemory"
     />
 

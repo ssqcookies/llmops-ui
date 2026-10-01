@@ -67,7 +67,7 @@ const defaultRetrievalConfig: RetrievalConfig = {
 }
 
 const defaultVoiceConfig: VoiceConfig = {
-  voice: 'echo',
+  voice: 'anna',
   autoPlay: true,
 }
 

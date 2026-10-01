@@ -535,15 +535,11 @@ const handlePluginChange = () => {
 }
 const handleWorkflowAction = async (action: string, item: WorkflowCard) => {
   if (action === 'edit') {
-    workflowModalMode.value = 'edit'
-    editingWorkflow.value = {
-      id: item.id,
-      name: item.name,
-      tool_call_name: item.workflowName,
-      icon: item.icon,
-      description: item.description,
-    }
-    createWorkflowModalVisible.value = true
+    // 进入工作流详情页（画布编排）
+    router.push({
+      name: ROUTE_NAME.WORKFLOW_DETAIL,
+      params: { workflowId: item.id },
+    } as RouteLocationRaw)
     return
   }
   if (action === 'delete') {

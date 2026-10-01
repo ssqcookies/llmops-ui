@@ -10,8 +10,9 @@ export const assistantAgentChat = (
   query: string,
   image_urls: string[] = [],
   onData: (event_response: Record<string, any>) => void,
+  onClose?: (reason: 'done' | 'parse-error' | 'network-error') => void,
 ) => {
-  return ssePost(`/assistant-agent/chat`, { body: { query, image_urls } }, onData)
+  return ssePost(`/assistant-agent/chat`, { body: { query, image_urls } }, onData, onClose)
 }
 
 // 停止与辅助Agent进行对话

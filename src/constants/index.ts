@@ -24,6 +24,7 @@ export const ROUTE_NAME = {
   KNOWLEDGE_DETAIL: 'KnowledgeDetail',
   KNOWLEDGE_DOCUMENT_DETAIL: 'KnowledgeDocumentDetail',
   KNOWLEDGE_ADD_FILE: 'KnowledgeAddFile',
+  WORKFLOW_DETAIL: 'WorkflowDetail',
   OPEN_API: 'OpenApi',
   APP_SQUARE: 'AppSquare',
   WEB_APP: 'WebApp',

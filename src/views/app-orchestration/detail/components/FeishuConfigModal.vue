@@ -37,11 +37,9 @@ const handleCancel = () => {
 }
 
 const handleSave = async () => {
-  try {
-    await formRef.value?.validate()
-  } catch {
-    return
-  }
+  // 该版本 Arco 的 validate() 失败时 resolve 错误对象（不 reject），需判断返回值
+  const err = await formRef.value?.validate()
+  if (err) return
   try {
     loading.value = true
     // TODO: 对接后端飞书配置保存接口

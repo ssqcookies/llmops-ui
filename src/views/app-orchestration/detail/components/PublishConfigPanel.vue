@@ -4,7 +4,8 @@
  *  - 顶部安全警告条
  *  - 3 个发布渠道（网页版 WebApp / 微信公众号 / 飞书）
  *  - WebApp 对接真实接口：getPublishedConfig / regenerateWebAppToken / publish / cancelPublish
- *  - 微信 / 飞书 弹窗预留（接口 TODO 标记）
+ *  - 微信公众号对接真实接口：GET/POST /platform/:app_id/wechat-config
+ *  - 飞书 弹窗预留（接口 TODO 标记）
  */
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -17,6 +18,7 @@ import {
 } from '@/services/app'
 import WeChatConfigModal from './WeChatConfigModal.vue'
 import FeishuConfigModal from './FeishuConfigModal.vue'
+import { useGetWechatConfig } from '@/hooks/use-platform'
 
 const props = defineProps<{ appId?: string }>()
 const route = useRoute()
@@ -35,8 +37,22 @@ const webAppUrl = computed(() => {
   return `https://www.llmops-imocc.com/web-app/${webAppToken.value}`
 })
 
-// ===== 2.微信公众号渠道 =====
+// ===== 2.微信公众号渠道（通过 use-platform hook 获取）=====
 const wechatModalVisible = ref(false)
+const { wechat_config, loadWechatConfig: fetchWechatConfig } = useGetWechatConfig()
+/** 配置状态：configured / unconfigured */
+const wechatStatus = computed<'configured' | 'unconfigured'>(() =>
+  String(wechat_config.value.status || '').toLowerCase() === 'configured'
+    ? 'configured'
+    : 'unconfigured',
+)
+/** 微信回调地址（已配置时展示，可复制） */
+const wechatUrl = computed(() => wechat_config.value.url || '')
+
+/** 无参包装：供生命周期与弹窗 saved 事件调用 */
+const loadWechatConfig = () => {
+  if (resolvedAppId.value) return fetchWechatConfig(resolvedAppId.value)
+}
 
 // ===== 3.飞书渠道 =====
 const feishuModalVisible = ref(false)
@@ -157,15 +173,36 @@ const handleCopyWebAppUrl = async () => {
 }
 
 // ===== 微信 / 飞书 操作 =====
+/** 复制微信回调地址 */
+const handleCopyWechatUrl = async () => {
+  if (!wechatUrl.value) return
+  try {
+    await navigator.clipboard.writeText(wechatUrl.value)
+    Message.success('地址已复制')
+  } catch {
+    Message.error('复制失败')
+  }
+}
+
 const handleOpenWeChat = () => { wechatModalVisible.value = true }
 const handleOpenFeishu = () => { feishuModalVisible.value = true }
 
-// ===== 暴露刷新方法给父组件 =====
-defineExpose({ refresh: loadWebAppConfig })
+// ===== 暴露刷新方法给父组件（WebApp + 微信状态一起刷新）=====
+defineExpose({
+  refresh: async () => {
+    await Promise.all([loadWebAppConfig(), loadWechatConfig()])
+  },
+})
 
 // ===== 生命周期 =====
-onMounted(loadWebAppConfig)
-watch(resolvedAppId, loadWebAppConfig)
+onMounted(() => {
+  loadWebAppConfig()
+  loadWechatConfig()
+})
+watch(resolvedAppId, () => {
+  loadWebAppConfig()
+  loadWechatConfig()
+})
 </script>
 
 <template>
@@ -223,7 +260,22 @@ watch(resolvedAppId, loadWebAppConfig)
                 </span>
               </template>
             </template>
-            <!-- 微信 / 飞书：当前都为未配置（接口 TODO 时写死） -->
+            <!-- 微信公众号状态 -->
+            <template v-else-if="ch.key === 'wechat'">
+              <template v-if="wechatStatus === 'configured'">
+                <span class="inline-flex items-center gap-1 text-[13px] text-[#00b42a]">
+                  <icon-check-circle-fill :size="14" />
+                  已配置
+                </span>
+              </template>
+              <template v-else>
+                <span class="inline-flex items-center gap-1 text-[13px] text-[#86909c]">
+                  <icon-close-circle-fill :size="14" />
+                  未配置
+                </span>
+              </template>
+            </template>
+            <!-- 飞书：接口待对接，当前为未配置 -->
             <template v-else>
               <span class="inline-flex items-center gap-1 text-[13px] text-[#86909c]">
                 <icon-close-circle-fill :size="14" />
@@ -271,10 +323,28 @@ watch(resolvedAppId, loadWebAppConfig)
 
             <!-- 微信公众号行 -->
             <template v-else-if="ch.key === 'wechat'">
-              <a-button type="primary" size="medium" @click="handleOpenWeChat">
-                <template #icon><icon-settings :size="14" /></template>
-                立即配置
-              </a-button>
+              <!-- 已配置：回调地址（可复制）+ 更新配置 -->
+              <template v-if="wechatStatus === 'configured' && wechatUrl">
+                <div
+                  class="flex items-center gap-2 px-3 h-8 rounded-md bg-[#f2f3f5] text-[#4e5969] text-[13px] cursor-pointer hover:bg-[#e5e6eb] transition-colors flex-1 min-w-0"
+                  @click="handleCopyWechatUrl"
+                  :title="'点击复制 ' + wechatUrl"
+                >
+                  <span class="truncate">{{ wechatUrl }}</span>
+                  <icon-copy :size="13" class="flex-shrink-0 text-[#86909c]" />
+                </div>
+                <a-button type="primary" size="medium" @click="handleOpenWeChat">
+                  <template #icon><icon-settings :size="14" /></template>
+                  更新配置
+                </a-button>
+              </template>
+              <!-- 未配置 -->
+              <template v-else>
+                <a-button type="primary" size="medium" @click="handleOpenWeChat">
+                  <template #icon><icon-settings :size="14" /></template>
+                  立即配置
+                </a-button>
+              </template>
             </template>
 
             <!-- 飞书行 -->
@@ -292,7 +362,9 @@ watch(resolvedAppId, loadWebAppConfig)
     <!-- 微信公众号配置弹窗 -->
     <WeChatConfigModal
       :visible="wechatModalVisible"
+      :app-id="resolvedAppId"
       @update:visible="(v) => wechatModalVisible = v"
+      @saved="loadWechatConfig"
     />
 
     <!-- 飞书配置弹窗 -->

@@ -31,6 +31,8 @@ export type GetWebAppConversationsResponse = BaseResponse<WebAppConversationSumm
 // WebApp 单条消息（会话详情）
 export type WebAppConversationMessage = {
   id: string
+  /** 一问一答共享的 id，用于整组删除 */
+  pairId?: string
   role: 'user' | 'assistant'
   content: string
   /** 用户消息携带的图片 URLs */

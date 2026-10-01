@@ -26,6 +26,8 @@ export interface ChatMessageItem {
   id: string
   role: 'user' | 'assistant'
   content: string
+  /** 消息创建时间（秒级时间戳） */
+  createdAt?: number
   /** 用户消息携带的图片 URLs */
   images?: string[]
   tokens?: number

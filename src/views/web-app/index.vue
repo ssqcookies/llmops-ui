@@ -161,8 +161,10 @@ const loadMessages = async (conversationId: string) => {
     const rawList = msgResp.data.list.slice().reverse()
     const items: WebAppConversationMessage[] = []
     rawList.forEach((item) => {
+      const pairId = item.id
       items.push({
         id: `${item.id}-q`,
+        pairId,
         role: 'user',
         content: item.query,
         image_urls: item.image_urls ?? [],
@@ -170,6 +172,7 @@ const loadMessages = async (conversationId: string) => {
       })
       items.push({
         id: `${item.id}-a`,
+        pairId,
         role: 'assistant',
         content: item.answer,
         total_token_count: item.total_token_count || undefined,
@@ -209,26 +212,36 @@ const handleNewConversation = () => {
 }
 
 // ===== 6.SSE 对话 =====
-const handleSend = async () => {
-  const query = inputValue.value.trim()
+/**
+ * 发送消息。
+ *  - 正常输入：不传参，从 inputValue / pendingImages 读取
+ *  - 重发：传入原消息的文本 + 图片
+ */
+const handleSend = async (override?: { query: string; imageUrls: string[] }) => {
+  const query = override?.query ?? inputValue.value.trim()
   if (!query || aiLoading.value) return
-  // 图片仍在上传中则不发送
-  if (pendingImages.value.some((img) => img.uploading)) return
+  if (!override && pendingImages.value.some((img) => img.uploading)) return
 
-  // 取出已上传完成的图片 URLs
-  const imageUrls = pendingImages.value.map((img) => img.url)
+  // 取出图片 URLs
+  const imageUrls = override?.imageUrls ?? pendingImages.value.map((img) => img.url)
+
+  // 本次问答共享 pairId
+  const pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
 
   // 本地先 push user 消息（含图片）
   const userMsg: WebAppConversationMessage = {
     id: 'u-' + Date.now(),
+    pairId,
     role: 'user',
     content: query,
     image_urls: imageUrls,
     created_at: Math.floor(Date.now() / 1000),
   }
   messages.value.push(userMsg)
-  inputValue.value = ''
-  pendingImages.value = []
+  if (!override) {
+    inputValue.value = ''
+    pendingImages.value = []
+  }
   aiLoading.value = true
   hasStreamContent.value = false
   scrollToBottom()
@@ -236,6 +249,7 @@ const handleSend = async () => {
   // 本地 push 空 assistant 占位
   const aiMsg: WebAppConversationMessage = {
     id: 'a-' + Date.now(),
+    pairId,
     role: 'assistant',
     content: '',
     agent_thoughts: [],
@@ -244,11 +258,17 @@ const handleSend = async () => {
   messages.value.push(aiMsg)
   const localAiId = aiMsg.id
   let localDone = false
+  /** 空闲看门狗：90s 无事件强制收尾 */
+  let watchdog: ReturnType<typeof setTimeout> | null = null
   let localMsg = messages.value.find((m) => m.id === localAiId)!
 
   const finishStreaming = () => {
     if (localDone) return
     localDone = true
+    if (watchdog) {
+      clearTimeout(watchdog)
+      watchdog = null
+    }
     aiLoading.value = false
     currentTaskId.value = ''
     // 重新拉会话列表，让后端生成的新会话（或最新摘要）出现在侧栏；同时同步当前会话名称
@@ -262,6 +282,9 @@ const handleSend = async () => {
 
   const onEvent = (ev: Record<string, any>) => {
     if (localDone) return
+    // 每收到一个事件重置空闲看门狗
+    if (watchdog) clearTimeout(watchdog)
+    watchdog = setTimeout(abortWithError, 90_000)
     const rawEvent = ev.event
     const data = ev.data || {}
     if (data.task_id) currentTaskId.value = data.task_id
@@ -310,6 +333,18 @@ const handleSend = async () => {
     }
   }
 
+  /**
+   * 异常收尾：流已关闭但未收到 agent_end/stop 收尾事件
+   * （后端中间步骤报错被吞掉时，HTTP 200 但数据为空）
+   */
+  const abortWithError = () => {
+    if (localDone) return
+    if (!localMsg.content) localMsg.content = '服务异常，未返回任何内容，请稍后重试'
+    finishStreaming()
+  }
+  // 初始看门狗
+  watchdog = setTimeout(abortWithError, 90_000)
+
   try {
     // 首次消息不带 conversation_id，后端自动创建会话并在 SSE 事件中回传；后续消息带上
     await webAppChat(
@@ -320,9 +355,10 @@ const handleSend = async () => {
         ...(currentConversationId.value ? { conversation_id: currentConversationId.value } : {}),
       },
       onEvent,
+      abortWithError,
     )
   } catch {
-    finishStreaming()
+    abortWithError()
   }
 }
 
@@ -337,6 +373,18 @@ const handleStop = async () => {
   // 前端强制收尾（后端 stop 后可能还会发 stop 事件）
   aiLoading.value = false
   currentTaskId.value = ''
+}
+
+// ===== 7.1 重发：用原用户消息重新发起问答 =====
+const handleResend = (msg: WebAppConversationMessage) => {
+  if (aiLoading.value) return
+  handleSend({ query: msg.content, imageUrls: msg.image_urls ?? [] })
+}
+
+// ===== 7.2 删除该组问答（本地移除） =====
+const handleDeleteMessage = (msg: WebAppConversationMessage) => {
+  if (!msg.pairId) return
+  messages.value = messages.value.filter((m) => m.pairId !== msg.pairId)
 }
 
 // ===== 8.重命名 =====
@@ -440,11 +488,13 @@ onMounted(async () => {
       :show-opening="messages.length === 0"
       :pending-images="pendingImages"
       @update:input-value="inputValue = $event"
-      @send="handleSend"
+      @send="handleSend()"
       @stop="handleStop"
       @scroll-bottom="scrollToBottom"
       @select-images="handleSelectImages"
       @remove-image="handleRemoveImage"
+      @resend="handleResend"
+      @delete-message="handleDeleteMessage"
     />
 
     <!-- 重命名弹窗 -->

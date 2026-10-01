@@ -16,8 +16,9 @@ export const webAppChat = (
   token: string,
   req: WebAppChatRequest,
   onData: (event_response: Record<string, any>) => void,
+  onClose?: (reason: 'done' | 'parse-error' | 'network-error') => void,
 ) => {
-  return ssePost(`/web-apps/${token}/chat`, { body: req }, onData)
+  return ssePost(`/web-apps/${token}/chat`, { body: req }, onData, onClose)
 }
 
 // 停止与指定 WebApp 进行对话
